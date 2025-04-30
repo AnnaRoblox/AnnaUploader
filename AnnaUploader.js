@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      3.6
+// @version      3.7
 // @description  Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @grant        GM_getValue
@@ -20,7 +20,7 @@
     const ASSET_TYPE_DECAL      = 13;
     const UPLOAD_RETRY_DELAY    = 2000;
     const MAX_RETRIES           = 3;
-    const FORCED_NAME_ON_MOD    = "Upload Using AnnaUploader";
+    const FORCED_NAME_ON_MOD    = "Uploaded Using AnnaUploader";
 
     // ========== PERSISTENT USER CONFIG ========== //
     let USER_ID = GM_getValue('userId', null);
