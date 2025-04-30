@@ -1,15 +1,13 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      3.7
+// @version      3.8
 // @description  Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @license      MIT
-// @downloadURL  https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
-// @updateURL    https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
 // ==/UserScript==
 
 (function() {
@@ -26,9 +24,11 @@
     let USER_ID = GM_getValue('userId', null);
     // ============================================ //
 
-    let uploadQueue = [];
-    let isUploading   = false;
-    let csrfToken     = null;
+    let uploadQueue    = [];
+    let isUploading    = false;
+    let csrfToken      = null;
+    let uploaderContainer;
+    let currentBatch = null;  // { total, success, failures: [{fileName, reason}] }
 
     async function fetchCSRFToken() {
         try {
@@ -58,7 +58,7 @@
      * @param {File} file
      * @param {number} assetType
      * @param {number} retries
-     * @param {boolean} forceName - if true, use FORCED_NAME_ON_MOD as displayName
+     * @param {boolean} forceName
      */
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) {
@@ -91,17 +91,16 @@
 
             if (response.ok) {
                 console.log(`✅ Uploaded (${assetType === ASSET_TYPE_TSHIRT ? "TShirt" : "Decal"}): ${file.name}`);
-                return;
+                return { success: true };
             }
 
             const status = response.status;
             const text = await response.text();
 
-            // Try parse JSON error if possible
             let json;
             try { json = JSON.parse(text); } catch {}
 
-            // Handle moderated-name error (400 + specific code/message)
+            // Moderated-name
             if (status === 400 && json?.code === "INVALID_ARGUMENT" &&
                 json?.message?.includes("fully moderated") &&
                 retries < MAX_RETRIES && !forceName) {
@@ -110,7 +109,7 @@
                 return await uploadFile(file, assetType, retries + 1, true);
             }
 
-            // Handle CSRF expiration
+            // CSRF expired
             if (status === 403 && retries < MAX_RETRIES) {
                 console.warn(`🔄 CSRF expired for ${file.name}: fetching new token and retrying...`);
                 csrfToken = null;
@@ -118,27 +117,67 @@
                 return await uploadFile(file, assetType, retries + 1, forceName);
             }
 
-            // Exhausted retries or unhandled error
             console.error(`❌ Upload failed for ${file.name}: [${status}]`, text);
-            throw new Error(`Failed to upload ${file.name} after ${retries} retries.`);
+            return { success: false, reason: `HTTP ${status}: ${text}` };
         } catch (error) {
             console.error(`Upload error for ${file.name}:`, error);
-            throw error;
+            return { success: false, reason: error.message };
         }
     }
 
     async function processUploadQueue() {
-        if (isUploading || uploadQueue.length === 0) return;
+        if (isUploading || uploadQueue.length === 0) {
+            // If queue is empty and we just finished, show summary
+            if (!isUploading && uploadQueue.length === 0 && currentBatch) {
+                showBatchSummary();
+                currentBatch = null;
+            }
+            return;
+        }
+
         isUploading = true;
         const { file, assetType } = uploadQueue.shift();
+
+        let result;
         try {
-            await uploadFile(file, assetType);
-        } catch (e) {
-            // already logged inside uploadFile
-        } finally {
-            isUploading = false;
-            processUploadQueue();
+            result = await uploadFile(file, assetType);
+        } catch {
+            result = { success: false, reason: 'Unexpected error' };
         }
+
+        // Update batch counts
+        if (currentBatch) {
+            if (result.success) {
+                currentBatch.success++;
+            } else {
+                currentBatch.failures.push({ fileName: file.name, reason: result.reason });
+            }
+        }
+
+        isUploading = false;
+        processUploadQueue();
+    }
+
+    function showBatchSummary() {
+        const { total, success, failures } = currentBatch;
+        const failureCount = failures.length;
+        const summaryEl = document.createElement('div');
+        summaryEl.style.marginTop = '10px';
+        summaryEl.style.padding = '10px';
+        summaryEl.style.backgroundColor = '#f0f0f0';
+        summaryEl.style.border = '1px solid #ccc';
+        summaryEl.style.borderRadius = '4px';
+        summaryEl.style.fontSize = '14px';
+        summaryEl.innerHTML = `
+            <strong>${success} of ${total} files uploaded successfully.</strong><br>
+            ${failureCount > 0
+                ? `<strong>${failureCount} failed:</strong> ${failures.map(f => `${f.fileName} (${f.reason})`).join('; ')}`
+                : ''}
+        `;
+        uploaderContainer.appendChild(summaryEl);
+        setTimeout(() => {
+            summaryEl.remove();
+        }, 5000);
     }
 
     function handleFileSelect(files, assetType, uploadBoth = false) {
@@ -146,6 +185,10 @@
             console.warn('No files selected.');
             return;
         }
+        // Initialize a new batch
+        const itemCount = uploadBoth ? files.length * 2 : files.length;
+        currentBatch = { total: itemCount, success: 0, failures: [] };
+
         for (let file of files) {
             if (uploadBoth) {
                 uploadQueue.push({ file, assetType: ASSET_TYPE_TSHIRT });
@@ -160,8 +203,8 @@
     }
 
     function createUploaderUI() {
-        const container = document.createElement('div');
-        Object.assign(container.style, {
+        uploaderContainer = document.createElement('div');
+        Object.assign(uploaderContainer.style, {
             position: 'fixed',
             top: '10px',
             right: '10px',
@@ -181,7 +224,7 @@
         title.textContent = 'Multi-File Uploader';
         title.style.margin = '0';
         title.style.fontSize = '16px';
-        container.appendChild(title);
+        uploaderContainer.appendChild(title);
 
         const makeBtn = (text, onClick) => {
             const btn = document.createElement('button');
@@ -191,25 +234,25 @@
             return btn;
         };
 
-        container.appendChild(makeBtn('Upload T-Shirts', () => {
+        uploaderContainer.appendChild(makeBtn('Upload T-Shirts', () => {
             const input = document.createElement('input');
             input.type = 'file'; input.accept = 'image/*'; input.multiple = true;
             input.addEventListener('change', e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT));
             input.click();
         }));
-        container.appendChild(makeBtn('Upload Decals', () => {
+        uploaderContainer.appendChild(makeBtn('Upload Decals', () => {
             const input = document.createElement('input');
             input.type = 'file'; input.accept = 'image/*'; input.multiple = true;
             input.addEventListener('change', e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL));
             input.click();
         }));
-        container.appendChild(makeBtn('Upload Both', () => {
+        uploaderContainer.appendChild(makeBtn('Upload Both', () => {
             const input = document.createElement('input');
             input.type = 'file'; input.accept = 'image/*'; input.multiple = true;
             input.addEventListener('change', e => handleFileSelect(e.target.files, null, true));
             input.click();
         }));
-        container.appendChild(makeBtn('Change ID', () => {
+        uploaderContainer.appendChild(makeBtn('Change ID', () => {
             const newId = prompt("Enter your Roblox User ID:", USER_ID);
             if (newId && !isNaN(newId)) {
                 USER_ID = Number(newId);
@@ -224,9 +267,9 @@
         pasteHint.textContent = 'Paste images (Ctrl+V) to upload as decals!';
         pasteHint.style.fontSize = '12px';
         pasteHint.style.color = '#555';
-        container.appendChild(pasteHint);
+        uploaderContainer.appendChild(pasteHint);
 
-        document.body.appendChild(container);
+        document.body.appendChild(uploaderContainer);
     }
 
     function handlePaste(event) {
