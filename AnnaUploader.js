@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      3.4
+// @version      3.5
 // @description  Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @grant        GM_getValue
@@ -23,7 +23,7 @@
 
     // ========== PERSISTENT USER CONFIG ========== //
     // Will default to this value only once, then store whatever you enter
-    let USER_ID = GM_getValue('userId', 32456865);
+    let USER_ID = GM_getValue('userId', null);
     // ============================================ //
 
     let uploadQueue = [];
