@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      3.8
+// @version      3.9
 // @description  allows you to Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @license      MIT
+// @downloadURL  https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
+// @updateURL    https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
 // ==/UserScript==
 
 (function() {
@@ -20,15 +22,12 @@
     const MAX_RETRIES           = 3;
     const FORCED_NAME_ON_MOD    = "Uploaded Using AnnaUploader";
 
-    // ========== PERSISTENT USER CONFIG ========== //
     let USER_ID = GM_getValue('userId', null);
-    // ============================================ //
 
     let uploadQueue     = [];
     let isUploading     = false;
     let csrfToken       = null;
 
-    // For live progress
     let batchTotal      = 0;
     let completedCount  = 0;
     let statusElement   = null;
@@ -56,13 +55,6 @@
         }
     }
 
-    /**
-     * Upload a single file, retrying on CSRF or moderated-name errors.
-     * @param {File} file
-     * @param {number} assetType
-     * @param {number} retries
-     * @param {boolean} forceName - if true, use FORCED_NAME_ON_MOD as displayName
-     */
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) {
             await fetchCSRFToken();
@@ -100,20 +92,18 @@
             const status = response.status;
             const text = await response.text();
 
-            // Try parse JSON error if possible
             let json;
             try { json = JSON.parse(text); } catch {}
 
-            // Handle moderated-name error (400 + specific code/message)
-            if (status === 400 && json?.code === "INVALID_ARGUMENT" &&
-                json?.message?.includes("fully moderated") &&
-                retries < MAX_RETRIES && !forceName) {
-                console.warn(`⚠️ Name moderated for ${file.name}: retrying with forced name...`);
+            const isModeratedName = status === 400 && json?.code === "INVALID_ARGUMENT" && json?.message?.includes("fully moderated");
+            const isInvalidNameLength = status === 400 && json?.code === "INVALID_ARGUMENT" && json?.message?.includes("name length is invalid");
+
+            if ((isModeratedName || isInvalidNameLength) && retries < MAX_RETRIES && !forceName) {
+                console.warn(`⚠️ Invalid name for ${file.name}: retrying with forced name...`);
                 await new Promise(res => setTimeout(res, UPLOAD_RETRY_DELAY));
                 return await uploadFile(file, assetType, retries + 1, true);
             }
 
-            // Handle CSRF expiration
             if (status === 403 && retries < MAX_RETRIES) {
                 console.warn(`🔄 CSRF expired for ${file.name}: fetching new token and retrying...`);
                 csrfToken = null;
@@ -121,7 +111,6 @@
                 return await uploadFile(file, assetType, retries + 1, forceName);
             }
 
-            // Exhausted retries or unhandled error
             console.error(`❌ Upload failed for ${file.name}: [${status}]`, text);
             throw new Error(`Failed to upload ${file.name} after ${retries} retries.`);
         } catch (error) {
@@ -136,12 +125,10 @@
         const { file, assetType } = uploadQueue.shift();
         try {
             await uploadFile(file, assetType);
-            // increment and update live status
             completedCount++;
             updateStatus();
-        } catch (e) {
-            // already logged inside uploadFile
-        } finally {
+        } catch (e) {}
+        finally {
             isUploading = false;
             processUploadQueue();
         }
@@ -161,7 +148,6 @@
             console.warn('No files selected.');
             return;
         }
-        // set up batch progress
         batchTotal = uploadBoth ? files.length * 2 : files.length;
         completedCount = 0;
         updateStatus();
@@ -246,7 +232,6 @@
         pasteHint.style.color = '#555';
         container.appendChild(pasteHint);
 
-        // status display element
         statusElement = document.createElement('div');
         statusElement.style.fontSize = '12px';
         statusElement.style.color = '#000';
