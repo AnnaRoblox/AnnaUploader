@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      3.9
+// @version      4.0
 // @description  allows you to Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
+// @run-at       document-idle
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
@@ -15,22 +16,20 @@
 (function() {
     'use strict';
 
-    const ROBLOX_UPLOAD_URL     = "https://apis.roblox.com/assets/user-auth/v1/assets";
-    const ASSET_TYPE_TSHIRT     = 11;
-    const ASSET_TYPE_DECAL      = 13;
-    const UPLOAD_RETRY_DELAY    = 2000;
-    const MAX_RETRIES           = 3;
-    const FORCED_NAME_ON_MOD    = "Uploaded Using AnnaUploader";
+    const ROBLOX_UPLOAD_URL  = "https://apis.roblox.com/assets/user-auth/v1/assets";
+    const ASSET_TYPE_TSHIRT  = 11;
+    const ASSET_TYPE_DECAL   = 13;
+    const UPLOAD_RETRY_DELAY = 2000;
+    const MAX_RETRIES        = 3;
+    const FORCED_NAME_ON_MOD = "Uploaded Using AnnaUploader";
 
-    let USER_ID = GM_getValue('userId', null);
-
-    let uploadQueue     = [];
-    let isUploading     = false;
-    let csrfToken       = null;
-
-    let batchTotal      = 0;
-    let completedCount  = 0;
-    let statusElement   = null;
+    let USER_ID        = GM_getValue('userId', null);
+    let uploadQueue    = [];
+    let isUploading    = false;
+    let csrfToken      = null;
+    let batchTotal     = 0;
+    let completedCount = 0;
+    let statusElement  = null;
 
     async function fetchCSRFToken() {
         try {
@@ -91,7 +90,6 @@
 
             const status = response.status;
             const text = await response.text();
-
             let json;
             try { json = JSON.parse(text); } catch {}
 
@@ -168,7 +166,7 @@
     function createUploaderUI() {
         const container = document.createElement('div');
         Object.assign(container.style, {
-            position: 'fixed',
+            position: 'fixed',  // changed to fixed so the UI always shows
             top: '10px',
             right: '10px',
             backgroundColor: '#fff',
@@ -180,12 +178,30 @@
             display: 'flex',
             flexDirection: 'column',
             gap: '10px',
-            fontFamily: 'Arial, sans-serif'
+            fontFamily: 'Arial, sans-serif',
+            width: '200px'
         });
 
+        // Close button
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '×';
+        Object.assign(closeBtn.style, {
+            position: 'absolute',
+            top: '5px',
+            right: '8px',
+            background: 'transparent',
+            border: 'none',
+            fontSize: '16px',
+            cursor: 'pointer',
+            lineHeight: '1'
+        });
+        closeBtn.title = 'Close uploader';
+        closeBtn.addEventListener('click', () => container.remove());
+        container.appendChild(closeBtn);
+
         const title = document.createElement('h3');
-        title.textContent = 'Multi-File Uploader';
-        title.style.margin = '0';
+        title.textContent = 'AnnaUploader';
+        title.style.margin = '0 0 5px 0';
         title.style.fontSize = '16px';
         container.appendChild(title);
 
