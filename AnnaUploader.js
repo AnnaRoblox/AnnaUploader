@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.0
+// @version      4.1
 // @description  allows you to Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @run-at       document-idle
@@ -166,7 +166,7 @@
     function createUploaderUI() {
         const container = document.createElement('div');
         Object.assign(container.style, {
-            position: 'fixed',  // changed to fixed so the UI always shows
+            position: 'fixed',
             top: '10px',
             right: '10px',
             backgroundColor: '#fff',
@@ -182,7 +182,6 @@
             width: '200px'
         });
 
-        // Close button
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '×';
         Object.assign(closeBtn.style, {
@@ -232,13 +231,24 @@
             input.click();
         }));
         container.appendChild(makeBtn('Change ID', () => {
-            const newId = prompt("Enter your Roblox User ID:", USER_ID);
-            if (newId && !isNaN(newId)) {
+            const input = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
+            if (!input) return;
+
+            // Try to extract numeric ID from profile URL
+            const urlMatch = input.match(/roblox\.com\/users\/(\d+)\/profile/i);
+            let newId = null;
+            if (urlMatch) {
+                newId = urlMatch[1];
+            } else if (!isNaN(input.trim())) {
+                newId = input.trim();
+            }
+
+            if (newId) {
                 USER_ID = Number(newId);
                 GM_setValue('userId', USER_ID);
                 alert(`User ID updated to ${USER_ID}`);
             } else {
-                alert("Invalid ID. Please enter a numeric value.");
+                alert("Invalid input. Please enter a numeric ID or a valid profile URL.");
             }
         }));
 
