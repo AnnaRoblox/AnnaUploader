@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.1
+// @version      4.2
 // @description  allows you to Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @run-at       document-idle
@@ -233,16 +233,8 @@
         container.appendChild(makeBtn('Change ID', () => {
             const input = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
             if (!input) return;
-
-            // Try to extract numeric ID from profile URL
             const urlMatch = input.match(/roblox\.com\/users\/(\d+)\/profile/i);
-            let newId = null;
-            if (urlMatch) {
-                newId = urlMatch[1];
-            } else if (!isNaN(input.trim())) {
-                newId = input.trim();
-            }
-
+            let newId = urlMatch ? urlMatch[1] : (!isNaN(input.trim()) ? input.trim() : null);
             if (newId) {
                 USER_ID = Number(newId);
                 GM_setValue('userId', USER_ID);
@@ -253,7 +245,7 @@
         }));
 
         const pasteHint = document.createElement('div');
-        pasteHint.textContent = 'Paste images (Ctrl+V) to upload as decals!';
+        pasteHint.textContent = 'Paste images (Ctrl+V) to upload—name & type it first!';
         pasteHint.style.fontSize = '12px';
         pasteHint.style.color = '#555';
         container.appendChild(pasteHint);
@@ -275,9 +267,28 @@
                 event.preventDefault();
                 const blob = item.getAsFile();
                 const now = new Date();
-                const filename = `pasted_image_${now.toISOString().replace(/[^a-z0-9]/gi, '_')}.png`;
+                const defaultBase = `pasted_image_${now.toISOString().replace(/[^a-z0-9]/gi, '_')}`;
+                
+                // 1) Name prompt
+                let nameInput = prompt("Enter a name for the pasted image (no extension):", defaultBase);
+                if (nameInput === null) return; // cancelled
+                nameInput = nameInput.trim() || defaultBase;
+                const filename = nameInput.endsWith('.png') ? nameInput : `${nameInput}.png`;
+
+                // 2) Type prompt
+                let typeInput = prompt(
+                    "Upload as:\n  T = T-Shirt\n  D = Decal\n  C = Cancel",
+                    "D"
+                );
+                if (!typeInput) return;
+                typeInput = typeInput.trim().toUpperCase();
+                let chosenType = null;
+                if (typeInput === 'T') chosenType = ASSET_TYPE_TSHIRT;
+                else if (typeInput === 'D') chosenType = ASSET_TYPE_DECAL;
+                else return; // Cancel or invalid
+
                 const file = new File([blob], filename, { type: blob.type });
-                handleFileSelect([file], ASSET_TYPE_DECAL);
+                handleFileSelect([file], chosenType);
                 break;
             }
         }
