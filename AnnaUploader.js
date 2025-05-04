@@ -22,7 +22,7 @@
     const UPLOAD_RETRY_DELAY      = 0;
     const MAX_RETRIES             = 150;
     const FORCED_NAME_ON_MOD      = "Uploaded Using AnnaUploader";
-    const MAX_CONCURRENT_UPLOADS  = 20;  // Number of parallel uploads
+    const MAX_CONCURRENT_UPLOADS  = 50;  // Number of parallel uploads
 
     let USER_ID        = GM_getValue('userId', null);
     let uploadQueue    = [];
