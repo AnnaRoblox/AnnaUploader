@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.5
+// @version      4.6
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
+// @match        https://www.roblox.com/users/*/profile*
 // @run-at       document-idle
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -22,9 +23,11 @@
     const UPLOAD_RETRY_DELAY      = 0;
     const MAX_RETRIES             = 150;
     const FORCED_NAME_ON_MOD      = "Uploaded Using AnnaUploader";
-    const MAX_CONCURRENT_UPLOADS  = 50;  // Number of parallel uploads
 
+    // Load saved preferences:
     let USER_ID        = GM_getValue('userId', null);
+    let MAX_CONCURRENT_UPLOADS  = GM_getValue('maxUploads', 20);
+
     let uploadQueue    = [];
     let activeUploads  = 0;
     let csrfToken      = null;
@@ -128,7 +131,6 @@
     }
 
     function processUploadQueue() {
-        // Start as many uploads as allowed
         while (activeUploads < MAX_CONCURRENT_UPLOADS && uploadQueue.length > 0) {
             const { file, assetType } = uploadQueue.shift();
             activeUploads++;
@@ -185,7 +187,7 @@
             flexDirection: 'column',
             gap: '10px',
             fontFamily: 'Arial, sans-serif',
-            width: '220px'
+            width: '240px'
         });
 
         const closeBtn = document.createElement('button');
@@ -205,7 +207,7 @@
         container.appendChild(closeBtn);
 
         const title = document.createElement('h3');
-        title.textContent = 'AnnaUploader — Fast';
+        title.textContent = 'AnnaUploader';
         title.style.margin = '0 0 5px 0';
         title.style.fontSize = '16px';
         container.appendChild(title);
@@ -218,6 +220,7 @@
             return btn;
         };
 
+        // Basic upload buttons
         container.appendChild(makeBtn('Upload T-Shirts', () => {
             const input = document.createElement('input');
             input.type = 'file'; input.accept = 'image/*'; input.multiple = true;
@@ -236,6 +239,8 @@
             input.addEventListener('change', e => handleFileSelect(e.target.files, null, true));
             input.click();
         }));
+
+        // Change stored User ID
         container.appendChild(makeBtn('Change ID', () => {
             const input = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
             if (!input) return;
@@ -247,6 +252,31 @@
                 alert(`User ID updated to ${USER_ID}`);
             } else {
                 alert("Invalid input. Please enter a numeric ID or a valid profile URL.");
+            }
+        }));
+
+        // Profile-page shortcut: auto-set User ID
+        const profileMatch = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
+        if (profileMatch) {
+            container.appendChild(makeBtn('Use This Profile as ID', () => {
+                const newId = Number(profileMatch[1]);
+                USER_ID = newId;
+                GM_setValue('userId', USER_ID);
+                alert(`User ID set to ${USER_ID} from profile`);
+            }));
+        }
+
+        // Set max concurrent uploads
+        container.appendChild(makeBtn('Set Max Uploads', () => {
+            const input = prompt("Enter preferred max concurrent uploads:", MAX_CONCURRENT_UPLOADS);
+            if (!input) return;
+            const num = parseInt(input.trim(), 10);
+            if (!isNaN(num) && num > 0) {
+                MAX_CONCURRENT_UPLOADS = num;
+                GM_setValue('maxUploads', num);
+                alert(`Max concurrent uploads set to ${num}`);
+            } else {
+                alert("Invalid number. Please enter a positive integer.");
             }
         }));
 
@@ -301,7 +331,7 @@
     function init() {
         createUploaderUI();
         document.addEventListener('paste', handlePaste);
-        console.log('[Uploader] Fast mode initialized with User ID:', USER_ID);
+        console.log('[Uploader] Initialized with User ID:', USER_ID, 'Max uploads:', MAX_CONCURRENT_UPLOADS);
     }
 
     window.addEventListener('load', init);
