@@ -1,31 +1,32 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.4
-// @description  allows you to Upload multiple T-Shirts/Decals easily with AnnaUploader
+// @version      4.5
+// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @license      MIT
-// @downloadURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
-// @updateURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
+// @downloadURL  https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
+// @updateURL    https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    const ROBLOX_UPLOAD_URL  = "https://apis.roblox.com/assets/user-auth/v1/assets";
-    const ASSET_TYPE_TSHIRT  = 11;
-    const ASSET_TYPE_DECAL   = 13;
-    const UPLOAD_RETRY_DELAY = 0;
-    const MAX_RETRIES        = 50;
-    const FORCED_NAME_ON_MOD = "Uploaded Using AnnaUploader";
+    const ROBLOX_UPLOAD_URL       = "https://apis.roblox.com/assets/user-auth/v1/assets";
+    const ASSET_TYPE_TSHIRT       = 11;
+    const ASSET_TYPE_DECAL        = 13;
+    const UPLOAD_RETRY_DELAY      = 0;
+    const MAX_RETRIES             = 150;
+    const FORCED_NAME_ON_MOD      = "Uploaded Using AnnaUploader";
+    const MAX_CONCURRENT_UPLOADS  = 20;  // Number of parallel uploads
 
     let USER_ID        = GM_getValue('userId', null);
     let uploadQueue    = [];
-    let isUploading    = false;
+    let activeUploads  = 0;
     let csrfToken      = null;
     let batchTotal     = 0;
     let completedCount = 0;
@@ -93,8 +94,8 @@
             let json;
             try { json = JSON.parse(text); } catch {}
 
-            const isModeratedName = status === 400 && json?.code === "INVALID_ARGUMENT" && json?.message?.includes("fully moderated");
-            const isInvalidNameLength = status === 400 && json?.code === "INVALID_ARGUMENT" && json?.message?.includes("name length is invalid");
+            const isModeratedName      = status === 400 && json?.code === "INVALID_ARGUMENT" && json?.message?.includes("fully moderated");
+            const isInvalidNameLength  = status === 400 && json?.code === "INVALID_ARGUMENT" && json?.message?.includes("name length is invalid");
 
             if ((isModeratedName || isInvalidNameLength) && retries < MAX_RETRIES && !forceName) {
                 console.warn(`⚠️ Invalid name for ${file.name}: retrying with forced name...`);
@@ -117,27 +118,32 @@
         }
     }
 
-    async function processUploadQueue() {
-        if (isUploading || uploadQueue.length === 0) return;
-        isUploading = true;
-        const { file, assetType } = uploadQueue.shift();
-        try {
-            await uploadFile(file, assetType);
-            completedCount++;
-            updateStatus();
-        } catch (e) {}
-        finally {
-            isUploading = false;
-            processUploadQueue();
-        }
-    }
-
     function updateStatus() {
         if (!statusElement) return;
         if (batchTotal > 0) {
             statusElement.textContent = `${completedCount} of ${batchTotal} files uploaded successfully`;
         } else {
             statusElement.textContent = '';
+        }
+    }
+
+    function processUploadQueue() {
+        // Start as many uploads as allowed
+        while (activeUploads < MAX_CONCURRENT_UPLOADS && uploadQueue.length > 0) {
+            const { file, assetType } = uploadQueue.shift();
+            activeUploads++;
+            (async () => {
+                try {
+                    await uploadFile(file, assetType);
+                    completedCount++;
+                    updateStatus();
+                } catch (e) {
+                    // ignore individual errors
+                } finally {
+                    activeUploads--;
+                    processUploadQueue();
+                }
+            })();
         }
     }
 
@@ -179,7 +185,7 @@
             flexDirection: 'column',
             gap: '10px',
             fontFamily: 'Arial, sans-serif',
-            width: '200px'
+            width: '220px'
         });
 
         const closeBtn = document.createElement('button');
@@ -199,7 +205,7 @@
         container.appendChild(closeBtn);
 
         const title = document.createElement('h3');
-        title.textContent = 'AnnaUploader';
+        title.textContent = 'AnnaUploader — Fast';
         title.style.margin = '0 0 5px 0';
         title.style.fontSize = '16px';
         container.appendChild(title);
@@ -268,14 +274,12 @@
                 const blob = item.getAsFile();
                 const now = new Date();
                 const defaultBase = `pasted_image_${now.toISOString().replace(/[^a-z0-9]/gi, '_')}`;
-                
-                // 1) Name prompt
+
                 let nameInput = prompt("Enter a name for the pasted image (no extension):", defaultBase);
-                if (nameInput === null) return; // cancelled
+                if (nameInput === null) return;
                 nameInput = nameInput.trim() || defaultBase;
                 const filename = nameInput.endsWith('.png') ? nameInput : `${nameInput}.png`;
 
-                // 2) Type prompt
                 let typeInput = prompt(
                     "Upload as:\n  T = T-Shirt\n  D = Decal\n  C = Cancel",
                     "D"
@@ -285,7 +289,7 @@
                 let chosenType = null;
                 if (typeInput === 'T') chosenType = ASSET_TYPE_TSHIRT;
                 else if (typeInput === 'D') chosenType = ASSET_TYPE_DECAL;
-                else return; // Cancel or invalid
+                else return;
 
                 const file = new File([blob], filename, { type: blob.type });
                 handleFileSelect([file], chosenType);
@@ -297,7 +301,7 @@
     function init() {
         createUploaderUI();
         document.addEventListener('paste', handlePaste);
-        console.log('[Uploader] Initialized with User ID:', USER_ID);
+        console.log('[Uploader] Fast mode initialized with User ID:', USER_ID);
     }
 
     window.addEventListener('load', init);
