@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.2
+// @version      4.3
 // @description  allows you to Upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @run-at       document-idle
@@ -9,8 +9,8 @@
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @license      MIT
-// @downloadURL  https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
-// @updateURL    https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
+// @downloadURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
+// @updateURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
 // ==/UserScript==
 
 (function() {
@@ -19,8 +19,8 @@
     const ROBLOX_UPLOAD_URL  = "https://apis.roblox.com/assets/user-auth/v1/assets";
     const ASSET_TYPE_TSHIRT  = 11;
     const ASSET_TYPE_DECAL   = 13;
-    const UPLOAD_RETRY_DELAY = 2000;
-    const MAX_RETRIES        = 3;
+    const UPLOAD_RETRY_DELAY = 12;
+    const MAX_RETRIES        = 10;
     const FORCED_NAME_ON_MOD = "Uploaded Using AnnaUploader";
 
     let USER_ID        = GM_getValue('userId', null);
