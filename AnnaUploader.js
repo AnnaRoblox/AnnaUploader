@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.7
+// @version      4.8
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -25,7 +25,8 @@
     const FORCED_NAME        = "Uploaded Using AnnaUploader";
 
     // Stored settings
-    let USER_ID     = GM_getValue('userId', null);
+    let USER_ID        = GM_getValue('userId', null);
+    let useForcedName = false; // toggle: false => use file names, true => use FORCED_NAME
 
     // Mass-upload state
     let massMode     = false;
@@ -140,10 +141,10 @@
         updateStatus();
         for (let f of files) {
             if (both) {
-                tasks.push(uploadFile(f, ASSET_TYPE_TSHIRT));
-                tasks.push(uploadFile(f, ASSET_TYPE_DECAL));
+                tasks.push(uploadFile(f, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                tasks.push(uploadFile(f, ASSET_TYPE_DECAL, 0, useForcedName));
             } else {
-                tasks.push(uploadFile(f, assetType));
+                tasks.push(uploadFile(f, assetType, 0, useForcedName));
             }
         }
         Promise.all(tasks).then(()=>console.log('[Uploader] done'));
@@ -155,7 +156,7 @@
         completed = 0;
         updateStatus();
 
-        const tasks = massQueue.map(item => uploadFile(item.f, item.type));
+        const tasks = massQueue.map(item => uploadFile(item.f, item.type, 0, useForcedName));
         massQueue = [];
         updateStatus();
         Promise.all(tasks).then(()=>{
@@ -175,55 +176,52 @@
             display:'flex', flexDirection:'column', gap:'8px', fontFamily:'Arial', width:'240px'
         });
 
-        // Close
+        // Close button
         const close = document.createElement('button');
-        close.textContent='×';
-        Object.assign(close.style,{
-            position:'absolute',top:'5px',right:'8px',
-            background:'transparent',border:'none',fontSize:'16px',cursor:'pointer'
+        close.textContent = '×';
+        Object.assign(close.style, {
+            position: 'absolute', top: '5px', right: '8px',
+            background: 'transparent', border: 'none', fontSize: '16px', cursor: 'pointer'
         });
-        close.title='Close';
-        close.onclick = ()=>c.remove();
+        close.title = 'Close';
+        close.onclick = () => c.remove();
         c.appendChild(close);
 
         // Title
         const title = document.createElement('h3');
-        title.textContent='AnnaUploader';
-        title.style.margin='0 0 5px 0';
-        title.style.fontSize='16px';
+        title.textContent = 'AnnaUploader';
+        title.style.margin = '0 0 5px 0';
+        title.style.fontSize = '16px';
         c.appendChild(title);
 
         // Buttons factory
-        const makeBtn = (txt,fn)=>{
-            const b=document.createElement('button');
-            b.textContent=txt;
-            Object.assign(b.style,{padding:'8px',cursor:'pointer'});
-            b.onclick=fn;
+        const makeBtn = (txt, fn) => {
+            const b = document.createElement('button');
+            b.textContent = txt;
+            Object.assign(b.style, { padding: '8px', cursor: 'pointer' });
+            b.onclick = fn;
             return b;
         };
 
         // Upload controls
-        c.appendChild(makeBtn('Upload T-Shirts',()=>{
-            const inp=document.createElement('input');
-            inp.type='file'; inp.accept='image/*'; inp.multiple=true;
-            inp.onchange = e=> handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
+        c.appendChild(makeBtn('Upload T-Shirts', () => {
+            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+            inp.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             inp.click();
         }));
-        c.appendChild(makeBtn('Upload Decals',()=>{
-            const inp=document.createElement('input');
-            inp.type='file'; inp.accept='image/*'; inp.multiple=true;
-            inp.onchange = e=> handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
+        c.appendChild(makeBtn('Upload Decals', () => {
+            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+            inp.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             inp.click();
         }));
-        c.appendChild(makeBtn('Upload Both',()=>{
-            const inp=document.createElement('input');
-            inp.type='file'; inp.accept='image/*'; inp.multiple=true;
-            inp.onchange = e=> handleFileSelect(e.target.files, null, true);
+        c.appendChild(makeBtn('Upload Both', () => {
+            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+            inp.onchange = e => handleFileSelect(e.target.files, null, true);
             inp.click();
         }));
 
         // Mass-upload toggle
-        toggleBtn = makeBtn('Enable Mass Upload', ()=>{
+        toggleBtn = makeBtn('Enable Mass Upload', () => {
             massMode = !massMode;
             toggleBtn.textContent = massMode ? 'Disable Mass Upload' : 'Enable Mass Upload';
             startBtn.style.display = massMode ? 'block' : 'none';
@@ -233,16 +231,23 @@
         });
         c.appendChild(toggleBtn);
 
-        // Start button (hidden until massMode)
+        // Start button
         startBtn = makeBtn('Start Mass Upload', startMassUpload);
         startBtn.style.display = 'none';
         c.appendChild(startBtn);
 
+        // Forced name toggle
+        const nameToggleBtn = makeBtn(`Use default Name: Off`, () => {
+            useForcedName = !useForcedName;
+            nameToggleBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
+        });
+        c.appendChild(nameToggleBtn);
+
         // Change ID
-        c.appendChild(makeBtn('Change ID', ()=>{
-            const inp=prompt("Enter your Roblox User ID or Profile URL:", USER_ID||'');
+        c.appendChild(makeBtn('Change ID', () => {
+            const inp = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
             if (!inp) return;
-            const m=inp.match(/users\/(\d+)/);
+            const m = inp.match(/users\/(\d+)/);
             const id = m ? m[1] : inp.trim();
             if (!isNaN(id)) {
                 USER_ID = Number(id);
@@ -254,7 +259,7 @@
         // Profile shortcut
         const pm = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
         if (pm) {
-            c.appendChild(makeBtn('Use This Profile as ID', ()=>{
+            c.appendChild(makeBtn('Use This Profile as ID', () => {
                 USER_ID = Number(pm[1]);
                 GM_setValue('userId', USER_ID);
                 alert(`User ID set to ${USER_ID}`);
@@ -263,12 +268,12 @@
 
         // Paste hint & status
         const hint = document.createElement('div');
-        hint.textContent='Paste images (Ctrl+V) to queue/upload';
-        hint.style.fontSize='12px'; hint.style.color='#555';
+        hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
+        hint.style.fontSize = '12px'; hint.style.color = '#555';
         c.appendChild(hint);
 
         statusEl = document.createElement('div');
-        statusEl.style.fontSize='12px'; statusEl.style.color='#000';
+        statusEl.style.fontSize = '12px'; statusEl.style.color = '#000';
         c.appendChild(statusEl);
 
         document.body.appendChild(c);
@@ -283,27 +288,27 @@
                 const blob = it.getAsFile();
                 const ts = new Date().toISOString().replace(/[^a-z0-9]/gi,'_');
                 let name = prompt('Name (no ext):', `pasted_${ts}`);
-                if (name===null) return;
-                name = name.trim()||`pasted_${ts}`;
-                const filename = name.endsWith('.png')?name:`${name}.png`;
+                if (name === null) return;
+                name = name.trim() || `pasted_${ts}`;
+                const filename = name.endsWith('.png') ? name : `${name}.png`;
                 let t = prompt('T=T-Shirt, D=Decal, C=Cancel','D');
                 if (!t) return;
                 t = t.trim().toUpperCase();
                 let type = null;
-                if (t==='T') type = ASSET_TYPE_TSHIRT;
-                else if (t==='D') type = ASSET_TYPE_DECAL;
+                if (t === 'T') type = ASSET_TYPE_TSHIRT;
+                else if (t === 'D') type = ASSET_TYPE_DECAL;
                 else return;
-                const file = new File([blob], filename, {type:blob.type});
+                const file = new File([blob], filename, {type: blob.type});
                 handleFileSelect([file], type);
                 break;
             }
         }
     }
 
-    window.addEventListener('load', ()=>{
+    window.addEventListener('load', () => {
         createUploaderUI();
         document.addEventListener('paste', handlePaste);
-        console.log('[AnnaUploader] initialized, massMode=', massMode);
+        console.log('[AnnaUploader] initialized, massMode=', massMode, 'useForcedName=', useForcedName);
     });
 
 })();
