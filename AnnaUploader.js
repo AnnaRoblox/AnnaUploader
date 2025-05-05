@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.4
+// @version      5.5
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -9,6 +9,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
+// @require      https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
 // @downloadURL  https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
 // @updateURL    https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
 // @license      MIT
@@ -29,6 +30,7 @@
     let useForcedName = false;
     let useMakeUnique = false;
     let uniqueCopies = 1;
+    let useDownload = false;
 
     let massMode = false;
     let massQueue = [];
@@ -36,7 +38,12 @@
     let completed = 0;
 
     let csrfToken = null;
-    let statusEl, toggleBtn, startBtn, copiesInput;
+    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn;
+
+    // Utility: extract base name without extension
+    function baseName(filename) {
+        return filename.replace(/\.[^/.]+$/, '');
+    }
 
     function loadLog() {
         const raw = GM_getValue(STORAGE_KEY, '{}');
@@ -48,7 +55,6 @@
         GM_setValue(STORAGE_KEY, JSON.stringify(log));
     }
 
-    // now accepts name parameter
     function logAsset(id, imageURL, name) {
         const log = loadLog();
         log[id] = {
@@ -67,16 +73,13 @@
                  || el.href.match(/\/dashboard\/creations\/store\/(\d+)\/configure/);
             if (m) {
                 const id = m[1];
-                // find optional image
                 let image = null;
                 const container = el.closest('*');
                 const img = container?.querySelector('img');
                 if (img?.src) image = img.src;
-                // find the asset name in a span with MuiTypography-root
                 let name = null;
                 const nameEl = container?.querySelector('span.MuiTypography-root');
                 if (nameEl) name = nameEl.textContent.trim();
-
                 logAsset(id, image, name);
             }
         });
@@ -97,28 +100,18 @@
         throw new Error('Cannot fetch CSRF token');
     }
 
-    function makeUniqueFile(file) {
-        return new Promise(resolve => {
-            const img = new Image();
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                const x = Math.floor(Math.random()*canvas.width);
-                const y = Math.floor(Math.random()*canvas.height);
-                ctx.fillStyle = `rgba(${Math.random()*255|0},${Math.random()*255|0},${Math.random()*255|0},1)`;
-                ctx.fillRect(x, y, 1, 1);
-                canvas.toBlob(blob => resolve(new File([blob], file.name, {type:file.type})), file.type);
-            };
-            img.src = URL.createObjectURL(file);
-        });
+    function updateStatus() {
+        if (!statusEl) return;
+        if (batchTotal > 0) {
+            statusEl.textContent = `${completed} of ${batchTotal} processed`;
+        } else {
+            statusEl.textContent = massMode ? `${massQueue.length} queued` : '';
+        }
     }
 
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) await fetchCSRFToken();
-        const displayName = forceName ? FORCED_NAME : file.name.replace(/\.[^/.]+$/, '');
+        const displayName = forceName ? FORCED_NAME : baseName(file.name);
         const fd = new FormData();
         fd.append('fileContent', file, file.name);
         fd.append('request', JSON.stringify({
@@ -160,51 +153,92 @@
         }
     }
 
-    function updateStatus() {
-        if (!statusEl) return;
-        if (batchTotal > 0) {
-            statusEl.textContent = `${completed} of ${batchTotal} processed`;
-        } else {
-            statusEl.textContent = massMode ? `${massQueue.length} queued` : '';
-        }
+    function makeUniqueFile(file, origBase, copyIndex) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const x = Math.floor(Math.random() * canvas.width);
+                const y = Math.floor(Math.random() * canvas.height);
+                ctx.fillStyle = `rgba(${Math.random()*255|0},${Math.random()*255|0},${Math.random()*255|0},1)`;
+                ctx.fillRect(x, y, 1, 1);
+                canvas.toBlob(blob => {
+                    // rename to include copy index
+                    const ext = file.name.split('.').pop();
+                    const newName = `${origBase}_variant${copyIndex}.${ext}`;
+                    resolve(new File([blob], newName, { type: file.type }));
+                }, file.type);
+            };
+            img.src = URL.createObjectURL(file);
+        });
     }
 
     async function handleFileSelect(files, assetType, both = false) {
         if (!files?.length) return;
+
+        // Map of baseName -> array of Files
+        const downloadsMap = {};
+
         const copies = useMakeUnique ? uniqueCopies : 1;
-        if (massMode) {
-            for (const f of files) {
-                for (let i = 0; i < copies; i++) {
-                    const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
-                    if (both) {
-                        massQueue.push({ f: toUse, type: ASSET_TYPE_TSHIRT });
-                        massQueue.push({ f: toUse, type: ASSET_TYPE_DECAL });
-                    } else {
-                        massQueue.push({ f: toUse, type: assetType });
-                    }
-                }
-            }
-            updateStatus();
-            return;
-        }
         batchTotal = files.length * (both ? 2 : 1) * copies;
         completed = 0;
         updateStatus();
+
         const tasks = [];
-        for (const f of files) {
-            for (let i = 0; i < copies; i++) {
-                const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
-                if (both) {
-                    tasks.push(uploadFile(toUse, ASSET_TYPE_TSHIRT, 0, useForcedName));
-                    tasks.push(uploadFile(toUse, ASSET_TYPE_DECAL,   0, useForcedName));
-                } else {
-                    tasks.push(uploadFile(toUse, assetType, 0, useForcedName));
-                }
+
+        for (const original of files) {
+            const origBase = baseName(original.name);
+            downloadsMap[origBase] = [];
+
+            for (let i = 1; i <= copies; i++) {
+                const filePromise = useMakeUnique
+                    ? makeUniqueFile(original, origBase, i)
+                    : Promise.resolve(new File([original], `${origBase}_copy${i}.${original.name.split('.').pop()}`, { type: original.type }));
+
+                const fileTask = filePromise.then(toUse => {
+                    // collect for download if needed
+                    if (useMakeUnique && useDownload) downloadsMap[origBase].push(toUse);
+
+                    // enqueue upload for TShirt/Decal
+                    if (both) {
+                        tasks.push(uploadFile(toUse, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                        tasks.push(uploadFile(toUse, ASSET_TYPE_DECAL,   0, useForcedName));
+                    } else {
+                        tasks.push(uploadFile(toUse, assetType, 0, useForcedName));
+                    }
+                });
+
+                await fileTask;
             }
         }
+
+        // wait for all uploads
         Promise.all(tasks).then(() => {
             console.log('[Uploader] batch done');
             scanForAssets();
+
+            // after uploads, trigger zips per original
+            if (useMakeUnique && useDownload) {
+                for (const [origBase, fileList] of Object.entries(downloadsMap)) {
+                    if (!fileList.length) continue;
+                    const zip = new JSZip();
+                    fileList.forEach(f => zip.file(f.name, f));
+                    zip.generateAsync({ type: 'blob' }).then(blob => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${origBase}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    });
+                }
+            }
         });
     }
 
@@ -213,14 +247,17 @@
         batchTotal = massQueue.length;
         completed = 0;
         updateStatus();
+
         const tasks = massQueue.map(item => uploadFile(item.f, item.type, 0, useForcedName));
         massQueue = [];
+
         Promise.all(tasks).then(() => {
             alert('Mass upload complete!');
             massMode = false;
             toggleBtn.textContent = 'Enable Mass Upload';
             startBtn.style.display = 'none';
             scanForAssets();
+            // note: mass-mode download for slip is not supported by design
         });
     }
 
@@ -280,6 +317,7 @@
             massQueue = []; batchTotal = completed = 0; updateStatus();
         });
         c.appendChild(toggleBtn);
+
         startBtn = btn('Start Mass Upload', startMassUpload);
         startBtn.style.display = 'none';
         c.appendChild(startBtn);
@@ -294,8 +332,14 @@
             useMakeUnique = !useMakeUnique;
             slipBtn.textContent = `Slip Mode: ${useMakeUnique?'On':'Off'}`;
             copiesInput.style.display = useMakeUnique ? 'block' : 'none';
+            downloadBtn.style.display = useMakeUnique ? 'block' : 'none';
+            if (!useMakeUnique) {
+                useDownload = false;
+                downloadBtn.textContent = 'Download Images: Off';
+            }
         });
         c.appendChild(slipBtn);
+
         copiesInput = document.createElement('input');
         copiesInput.type='number'; copiesInput.min='1'; copiesInput.value=uniqueCopies;
         copiesInput.style.width='100%'; copiesInput.style.boxSizing='border-box';
@@ -306,6 +350,13 @@
             else e.target.value = uniqueCopies;
         };
         c.appendChild(copiesInput);
+
+        downloadBtn = btn('Download Images: Off', () => {
+            useDownload = !useDownload;
+            downloadBtn.textContent = `Download Images: ${useDownload?'On':'Off'}`;
+        });
+        downloadBtn.style.display = 'none';
+        c.appendChild(downloadBtn);
 
         c.appendChild(btn('Change ID', () => {
             const inp = prompt("Enter your Roblox User ID or Profile URL:", USER_ID||'');
@@ -333,33 +384,26 @@
             const entries = Object.entries(log);
             const w = window.open('', '_blank');
             w.document.write(`<!DOCTYPE html>
-<html><head><title>Logged Assets</title><meta charset="utf-8">
+<html><head><meta charset="utf-8"><title>Logged Assets</title>
 <style>
 body { font-family:Arial; padding:20px; background:#fff; color:#000; transition:background 0.3s, color 0.3s; }
 h1 { margin-bottom:10px; }
 ul { padding-left:20px; }
-li { margin-bottom:10px; display: flex; flex-direction: column; gap: 4px; }
-img { max-height: 40px; border: 1px solid #ccc; }
-.asset-name { font-size: 90%; color: #333; margin-left: 20px; }
-button { margin-bottom: 10px; padding: 5px 10px; }
+li { margin-bottom:10px; }
+img { max-height:40px; border:1px solid #ccc; }
+.asset-name { font-size:90%; color:#333; margin-left:20px; }
+button { margin-bottom:10px; }
 </style></head><body>
-<button onclick="document.body.style.backgroundColor = (document.body.style.backgroundColor === 'black') ? 'white' : 'black'; document.body.style.color = (document.body.style.color === 'white') ? 'black' : 'white'; document.querySelectorAll('img').forEach(i => i.style.border = (document.body.style.backgroundColor === 'black') ? '1px solid #fff' : '1px solid #ccc');">
-Toggle Background</button>
+<button onclick="document.body.style.background=(document.body.style.background==='black'?'white':'black');document.body.style.color=(document.body.style.color==='white'?'black':'white');document.querySelectorAll('img').forEach(i=>i.style.border=(document.body.style.background==='black'?'1px solid #fff':'1px solid #ccc'));">Toggle Background</button>
 <h1>Logged Assets</h1>
-${ entries.length ? `<ul>${entries.map(([id, entry]) => {
-    let label = '';
-    if (entry.image) {
-        label = `<img src="${entry.image}" alt="thumb">`;
-    } else if (entry.image === null && entry.date) {
-        label = `<span>(image removed)</span>`;
-    } else {
-        label = `<span>(in review/image declined)</span>`;
-    }
-    return `<li>
-        <div style="display:flex; align-items:center; gap:10px;">${label}<a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a> — ${entry.date}</div>
-        <div class="asset-name">${entry.name}</div>
-    </li>`;
-}).join('')}</ul>` : `<p><em>No assets logged yet.</em></p>` }
+${ entries.length ? `<ul>${entries.map(([id,entry])=>`
+  <li>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${ entry.image ? `<img src="${entry.image}" alt> ` : `<span>(no image)</span>` }
+      <a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a> — ${entry.date}
+    </div>
+    <div class="asset-name">${entry.name}</div>
+  </li>`).join('') }</ul>` : `<p><em>No assets logged yet.</em></p>`}
 </body></html>`);
             w.document.close();
         }));
@@ -391,11 +435,7 @@ ${ entries.length ? `<ul>${entries.map(([id, entry]) => {
                 let t = prompt('T=T-Shirt, D=Decal, C=Cancel','D');
                 if (!t) return;
                 t = t.trim().toUpperCase();
-                const type = t==='T'
-                    ? ASSET_TYPE_TSHIRT
-                    : t==='D'
-                      ? ASSET_TYPE_DECAL
-                      : null;
+                const type = t==='T'? ASSET_TYPE_TSHIRT : t==='D'? ASSET_TYPE_DECAL : null;
                 if (!type) return;
                 handleFileSelect([new File([blob], filename, {type: blob.type})], type);
                 break;
@@ -407,7 +447,7 @@ ${ entries.length ? `<ul>${entries.map(([id, entry]) => {
         createUI();
         document.addEventListener('paste', handlePaste);
         scanForAssets();
-        console.log('[AnnaUploader] v5.4 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        console.log('[AnnaUploader] v5.5 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
 })();
