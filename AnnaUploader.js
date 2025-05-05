@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.2
+// @version      5.3
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -69,7 +69,7 @@
                 const id = m[1];
                 let image = null;
 
-                const container = el.closest('*'); // search container around the link
+                const container = el.closest('*');
                 const img = container.querySelector('img');
                 if (img && img.src) {
                     image = img.src;
@@ -333,12 +333,16 @@
             w.document.write(`<!DOCTYPE html>
 <html><head><title>Logged Assets</title><meta charset="utf-8">
 <style>
-body { font-family:Arial; padding:20px; }
+body { font-family:Arial; padding:20px; background:#fff; color:#000; transition:background 0.3s, color 0.3s; }
 h1 { margin-bottom:10px; }
 ul { padding-left:20px; }
 li { margin-bottom:6px; display: flex; align-items: center; gap: 10px; }
 img { max-height: 40px; border: 1px solid #ccc; }
-</style></head><body><h1>Logged Assets</h1>
+button { margin-bottom: 10px; padding: 5px 10px; }
+</style></head><body>
+<button onclick="document.body.style.backgroundColor = (document.body.style.backgroundColor === 'black') ? 'white' : 'black'; document.body.style.color = (document.body.style.color === 'white') ? 'black' : 'white'; document.querySelectorAll('img').forEach(i => i.style.border = (document.body.style.backgroundColor === 'black') ? '1px solid #fff' : '1px solid #ccc');">
+Toggle Background</button>
+<h1>Logged Assets</h1>
 ${ entries.length ? `<ul>${entries.map(([id, entry]) => {
     let label = '';
     if (entry.image) {
@@ -397,7 +401,7 @@ ${ entries.length ? `<ul>${entries.map(([id, entry]) => {
         createUI();
         document.addEventListener('paste', handlePaste);
         scanForAssets();
-        console.log('[AnnaUploader]  initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        console.log('[AnnaUploader] v5.3 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
 })();
