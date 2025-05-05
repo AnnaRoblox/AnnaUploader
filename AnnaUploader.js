@@ -200,7 +200,7 @@
             for (let i = 1; i <= copies; i++) {
                 const filePromise = useMakeUnique
                     ? makeUniqueFile(original, origBase, i)
-                    : Promise.resolve(new File([original], `${origBase}_copy${i}.${original.name.split('.').pop()}`, { type: original.type }));
+                    : Promise.resolve(original);
 
                 const fileTask = filePromise.then(toUse => {
                     if (useMakeUnique && useDownload) downloadsMap[origBase].push(toUse);
