@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.9
+// @version      5.0
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -28,6 +28,7 @@
     let USER_ID         = GM_getValue('userId', null);
     let useForcedName   = false; // toggle: false => use file names, true => use FORCED_NAME
     let useMakeUnique   = false; // toggle: false => upload as-is, true => tweak a random pixel for uniqueness
+    let uniqueCopies    = 1;     // number of unique copies when slip mode is on
 
     // Mass-upload state
     let massMode     = false;
@@ -39,6 +40,7 @@
     let statusEl     = null;
     let toggleBtn    = null;
     let startBtn     = null;
+    let copiesInput  = null; // UI element for copies
 
     // Fetch CSRF token from Roblox
     async function fetchCSRFToken() {
@@ -149,15 +151,18 @@
     // Handle file selection / queuing / immediate upload
     async function handleFileSelect(files, assetType, both = false) {
         if (!files || files.length === 0) return;
+        const copies = useMakeUnique ? uniqueCopies : 1;
         // Queuing for mass-upload
         if (massMode) {
             for (let f of files) {
-                const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
-                if (both) {
-                    massQueue.push({ f: toUse, type: ASSET_TYPE_TSHIRT });
-                    massQueue.push({ f: toUse, type: ASSET_TYPE_DECAL });
-                } else {
-                    massQueue.push({ f: toUse, type: assetType });
+                for (let i = 0; i < copies; i++) {
+                    const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
+                    if (both) {
+                        massQueue.push({ f: toUse, type: ASSET_TYPE_TSHIRT });
+                        massQueue.push({ f: toUse, type: ASSET_TYPE_DECAL });
+                    } else {
+                        massQueue.push({ f: toUse, type: assetType });
+                    }
                 }
             }
             updateStatus();
@@ -165,16 +170,18 @@
         }
         // Immediate parallel upload
         const tasks = [];
-        batchTotal = both ? files.length * 2 : files.length;
+        batchTotal = files.length * (both ? 2 : 1) * copies;
         completed = 0;
         updateStatus();
         for (let f of files) {
-            const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
-            if (both) {
-                tasks.push(uploadFile(toUse, ASSET_TYPE_TSHIRT, 0, useForcedName));
-                tasks.push(uploadFile(toUse, ASSET_TYPE_DECAL, 0, useForcedName));
-            } else {
-                tasks.push(uploadFile(toUse, assetType, 0, useForcedName));
+            for (let i = 0; i < copies; i++) {
+                const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
+                if (both) {
+                    tasks.push(uploadFile(toUse, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                    tasks.push(uploadFile(toUse, ASSET_TYPE_DECAL, 0, useForcedName));
+                } else {
+                    tasks.push(uploadFile(toUse, assetType, 0, useForcedName));
+                }
             }
         }
         Promise.all(tasks).then(() => console.log('[Uploader] done'));
@@ -277,12 +284,30 @@
         });
         c.appendChild(nameToggleBtn);
 
-        // Make-unique toggle
+        // Make-unique (Slip Mode) toggle
         const uniqueToggleBtn = makeBtn(`Slip Mode: Off`, () => {
             useMakeUnique = !useMakeUnique;
             uniqueToggleBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
+            // Show/hide copies input when slip mode toggles
+            copiesInput.style.display = useMakeUnique ? 'block' : 'none';
         });
         c.appendChild(uniqueToggleBtn);
+
+        // Unique copies input (only visible when slip mode is on)
+        copiesInput = document.createElement('input');
+        copiesInput.type = 'number';
+        copiesInput.min = '1';
+        copiesInput.value = uniqueCopies;
+        copiesInput.title = 'Number of unique copies';
+        copiesInput.style.width = '100%';
+        copiesInput.style.boxSizing = 'border-box';
+        copiesInput.style.display = 'none';
+        copiesInput.onchange = e => {
+            const v = parseInt(e.target.value, 10);
+            if (!isNaN(v) && v > 0) uniqueCopies = v;
+            else e.target.value = uniqueCopies;
+        };
+        c.appendChild(copiesInput);
 
         // Change user ID
         c.appendChild(makeBtn('Change ID', () => {
@@ -314,7 +339,8 @@
         c.appendChild(hint);
 
         statusEl = document.createElement('div');
-        statusEl.style.fontSize = '12px'; statusEl.style.color = '#000';
+        statusEl.style.fontSize = '12px'; 
+        statusEl.style.color = '#000';
         c.appendChild(statusEl);
 
         document.body.appendChild(c);
@@ -351,7 +377,7 @@
     window.addEventListener('load', () => {
         createUploaderUI();
         document.addEventListener('paste', handlePaste);
-        console.log('[AnnaUploader] initialized, massMode=', massMode, 'useForcedName=', useForcedName, 'useMakeUnique=', useMakeUnique);
+        console.log('[AnnaUploader] initialized, massMode=', massMode, 'useForcedName=', useForcedName, 'useMakeUnique=', useMakeUnique, 'uniqueCopies=', uniqueCopies);
     });
 
 })();
