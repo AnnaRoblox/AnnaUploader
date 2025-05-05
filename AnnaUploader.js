@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.5
-// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
+// @version      5.6
+// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader; retries with default name on name-too-long errors
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
 // @run-at       document-idle
@@ -126,21 +126,27 @@
                 headers: { 'x-csrf-token': csrfToken },
                 body: fd
             });
-            if (resp.ok) {
-                const result = await resp.json();
-                if (result.assetId) logAsset(result.assetId, null, displayName);
+            const txt = await resp.text();
+            let json; try { json = JSON.parse(txt); } catch {}
+            if (resp.ok && json.assetId) {
+                logAsset(json.assetId, null, displayName);
                 completed++;
                 updateStatus();
                 return;
             }
-            const txt = await resp.text();
-            let json; try { json = JSON.parse(txt); } catch {}
-            if (resp.status === 400 && json?.message?.includes('moderated') && retries < 5) {
-                return uploadFile(file, assetType, retries+1, true);
+            // If name-too-long error, retry with default name
+            if (json?.message === 'Asset name length is invalid.' && !forceName && retries < 5) {
+                console.warn('[Upload] name too long, retrying with default name');
+                return uploadFile(file, assetType, retries + 1, true);
             }
+            // Moderation error: try forced name
+            if (resp.status === 400 && json?.message?.includes('moderated') && retries < 5) {
+                return uploadFile(file, assetType, retries + 1, true);
+            }
+            // CSRF expired: retry
             if (resp.status === 403 && retries < 5) {
                 csrfToken = null;
-                return uploadFile(file, assetType, retries+1, forceName);
+                return uploadFile(file, assetType, retries + 1, forceName);
             }
             console.error(`[Upload] failed ${file.name} [${resp.status}]`, txt);
         } catch (e) {
@@ -167,7 +173,6 @@
                 ctx.fillStyle = `rgba(${Math.random()*255|0},${Math.random()*255|0},${Math.random()*255|0},1)`;
                 ctx.fillRect(x, y, 1, 1);
                 canvas.toBlob(blob => {
-                    // rename to include copy index
                     const ext = file.name.split('.').pop();
                     const newName = `${origBase}_variant${copyIndex}.${ext}`;
                     resolve(new File([blob], newName, { type: file.type }));
@@ -180,9 +185,7 @@
     async function handleFileSelect(files, assetType, both = false) {
         if (!files?.length) return;
 
-        // Map of baseName -> array of Files
         const downloadsMap = {};
-
         const copies = useMakeUnique ? uniqueCopies : 1;
         batchTotal = files.length * (both ? 2 : 1) * copies;
         completed = 0;
@@ -200,10 +203,7 @@
                     : Promise.resolve(new File([original], `${origBase}_copy${i}.${original.name.split('.').pop()}`, { type: original.type }));
 
                 const fileTask = filePromise.then(toUse => {
-                    // collect for download if needed
                     if (useMakeUnique && useDownload) downloadsMap[origBase].push(toUse);
-
-                    // enqueue upload for TShirt/Decal
                     if (both) {
                         tasks.push(uploadFile(toUse, ASSET_TYPE_TSHIRT, 0, useForcedName));
                         tasks.push(uploadFile(toUse, ASSET_TYPE_DECAL,   0, useForcedName));
@@ -216,12 +216,9 @@
             }
         }
 
-        // wait for all uploads
         Promise.all(tasks).then(() => {
             console.log('[Uploader] batch done');
             scanForAssets();
-
-            // after uploads, trigger zips per original
             if (useMakeUnique && useDownload) {
                 for (const [origBase, fileList] of Object.entries(downloadsMap)) {
                     if (!fileList.length) continue;
@@ -257,7 +254,6 @@
             toggleBtn.textContent = 'Enable Mass Upload';
             startBtn.style.display = 'none';
             scanForAssets();
-            // note: mass-mode download for slip is not supported by design
         });
     }
 
@@ -447,7 +443,7 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>`
         createUI();
         document.addEventListener('paste', handlePaste);
         scanForAssets();
-        console.log('[AnnaUploader] v5.5 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        console.log('[AnnaUploader] v5.6 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
 })();
