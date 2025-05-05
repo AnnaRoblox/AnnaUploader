@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.0
+// @version      5.1
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -26,9 +26,9 @@
 
     // Stored settings
     let USER_ID         = GM_getValue('userId', null);
-    let useForcedName   = false; // toggle: false => use file names, true => use FORCED_NAME
-    let useMakeUnique   = false; // toggle: false => upload as-is, true => tweak a random pixel for uniqueness
-    let uniqueCopies    = 1;     // number of unique copies when slip mode is on
+    let useForcedName   = false; // false => use file names, true => use FORCED_NAME
+    let useMakeUnique   = false; // Slip Mode: tweak a random pixel for uniqueness
+    let uniqueCopies    = 1;     // number of unique copies when Slip Mode is on
 
     // Mass-upload state
     let massMode     = false;
@@ -40,9 +40,9 @@
     let statusEl     = null;
     let toggleBtn    = null;
     let startBtn     = null;
-    let copiesInput  = null; // UI element for copies
+    let copiesInput  = null;
 
-    // Fetch CSRF token from Roblox
+    // Fetch CSRF token
     async function fetchCSRFToken() {
         const resp = await fetch(ROBLOX_UPLOAD_URL, {
             method: 'POST',
@@ -61,7 +61,7 @@
         throw new Error('Cannot fetch CSRF token');
     }
 
-    // Modify one random pixel to a random color to force uniqueness
+    // Make a file unique by altering one random pixel
     function makeUniqueFile(file) {
         return new Promise(resolve => {
             const img = new Image();
@@ -87,7 +87,7 @@
         });
     }
 
-    // Core upload logic with retry & forced-name handling
+    // Core upload with retries & forced-name
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) await fetchCSRFToken();
         const displayName = forceName ? FORCED_NAME : file.name.split('.')[0];
@@ -99,9 +99,8 @@
             assetType: assetType === ASSET_TYPE_TSHIRT ? "TShirt" : "Decal",
             creationContext: { creator: { userId: USER_ID }, expectedPrice: 0 }
         }));
-        let resp;
         try {
-            resp = await fetch(ROBLOX_UPLOAD_URL, {
+            const resp = await fetch(ROBLOX_UPLOAD_URL, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'x-csrf-token': csrfToken },
@@ -114,7 +113,8 @@
                 return;
             }
             const txt = await resp.text();
-            let json; try { json = JSON.parse(txt); } catch{}
+            let json;
+            try { json = JSON.parse(txt); } catch {}
             const badName = resp.status === 400 && json?.message?.includes('moderated');
             if (badName && retries < MAX_RETRIES && !forceName) {
                 await new Promise(r => setTimeout(r, UPLOAD_RETRY_DELAY));
@@ -129,14 +129,14 @@
         } catch (e) {
             console.error('Upload error', e);
         } finally {
-            if (!resp?.ok) {
+            if (completed < batchTotal) {
                 completed++;
                 updateStatus();
             }
         }
     }
 
-    // Update on-screen status
+    // Update status text
     function updateStatus() {
         if (!statusEl) return;
         if (batchTotal > 0) {
@@ -148,11 +148,12 @@
         }
     }
 
-    // Handle file selection / queuing / immediate upload
+    // Handle file select / queuing / immediate upload
     async function handleFileSelect(files, assetType, both = false) {
         if (!files || files.length === 0) return;
         const copies = useMakeUnique ? uniqueCopies : 1;
-        // Queuing for mass-upload
+
+        // Mass mode: just queue
         if (massMode) {
             for (let f of files) {
                 for (let i = 0; i < copies; i++) {
@@ -168,11 +169,13 @@
             updateStatus();
             return;
         }
-        // Immediate parallel upload
-        const tasks = [];
+
+        // Immediate: kick off uploads
         batchTotal = files.length * (both ? 2 : 1) * copies;
         completed = 0;
         updateStatus();
+
+        const tasks = [];
         for (let f of files) {
             for (let i = 0; i < copies; i++) {
                 const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
@@ -187,7 +190,7 @@
         Promise.all(tasks).then(() => console.log('[Uploader] done'));
     }
 
-    // Process the queued mass-upload items
+    // Start mass-upload processing
     function startMassUpload() {
         if (massQueue.length === 0) return alert('Nothing queued!');
         batchTotal = massQueue.length;
@@ -207,7 +210,7 @@
         });
     }
 
-    // Build the little UI panel
+    // Build the UI panel
     function createUploaderUI() {
         const c = document.createElement('div');
         Object.assign(c.style, {
@@ -217,7 +220,7 @@
             display:'flex', flexDirection:'column', gap:'8px', fontFamily:'Arial', width:'260px'
         });
 
-        // Close
+        // Close button
         const close = document.createElement('button');
         close.textContent = '×';
         Object.assign(close.style, {
@@ -244,19 +247,32 @@
             return b;
         };
 
-        // Upload buttons
+        // Upload T-Shirts
         c.appendChild(makeBtn('Upload T-Shirts', () => {
-            const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true;
+            const inp = document.createElement('input');
+            inp.type='file';
+            inp.accept='image/*';
+            inp.multiple=true;
             inp.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             inp.click();
         }));
+
+        // Upload Decals
         c.appendChild(makeBtn('Upload Decals', () => {
-            const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true;
+            const inp = document.createElement('input');
+            inp.type='file';
+            inp.accept='image/*';
+            inp.multiple=true;
             inp.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             inp.click();
         }));
+
+        // Upload Both
         c.appendChild(makeBtn('Upload Both', () => {
-            const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true;
+            const inp = document.createElement('input');
+            inp.type='file';
+            inp.accept='image/*';
+            inp.multiple=true;
             inp.onchange = e => handleFileSelect(e.target.files, null, true);
             inp.click();
         }));
@@ -267,7 +283,8 @@
             toggleBtn.textContent = massMode ? 'Disable Mass Upload' : 'Enable Mass Upload';
             startBtn.style.display = massMode ? 'block' : 'none';
             massQueue = [];
-            batchTotal = 0; completed = 0;
+            batchTotal = 0;
+            completed = 0;
             updateStatus();
         });
         c.appendChild(toggleBtn);
@@ -284,16 +301,15 @@
         });
         c.appendChild(nameToggleBtn);
 
-        // Make-unique (Slip Mode) toggle
+        // Slip Mode toggle
         const uniqueToggleBtn = makeBtn(`Slip Mode: Off`, () => {
             useMakeUnique = !useMakeUnique;
             uniqueToggleBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
-            // Show/hide copies input when slip mode toggles
             copiesInput.style.display = useMakeUnique ? 'block' : 'none';
         });
         c.appendChild(uniqueToggleBtn);
 
-        // Unique copies input (only visible when slip mode is on)
+        // Copies input
         copiesInput = document.createElement('input');
         copiesInput.type = 'number';
         copiesInput.min = '1';
@@ -332,21 +348,22 @@
             }));
         }
 
-        // Paste hint & status
+        // Hint & status
         const hint = document.createElement('div');
         hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
-        hint.style.fontSize = '12px'; hint.style.color = '#555';
+        hint.style.fontSize = '12px';
+        hint.style.color = '#555';
         c.appendChild(hint);
 
         statusEl = document.createElement('div');
-        statusEl.style.fontSize = '12px'; 
+        statusEl.style.fontSize = '12px';
         statusEl.style.color = '#000';
         c.appendChild(statusEl);
 
         document.body.appendChild(c);
     }
 
-    // Handle clipboard paste uploads
+    // Handle paste
     function handlePaste(e) {
         const items = e.clipboardData?.items;
         if (!items) return;
@@ -373,11 +390,14 @@
         }
     }
 
-    // Initialize on page load
+    // Init
     window.addEventListener('load', () => {
         createUploaderUI();
         document.addEventListener('paste', handlePaste);
-        console.log('[AnnaUploader] initialized, massMode=', massMode, 'useForcedName=', useForcedName, 'useMakeUnique=', useMakeUnique, 'uniqueCopies=', uniqueCopies);
+        console.log('[AnnaUploader] initialized, massMode=', massMode,
+                    'useForcedName=', useForcedName,
+                    'useMakeUnique=', useMakeUnique,
+                    'uniqueCopies=', uniqueCopies);
     });
 
 })();
