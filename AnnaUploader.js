@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.3
+// @version      5.4
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -48,34 +48,36 @@
         GM_setValue(STORAGE_KEY, JSON.stringify(log));
     }
 
-    function logAsset(id, imageURL) {
+    // now accepts name parameter
+    function logAsset(id, imageURL, name) {
         const log = loadLog();
         log[id] = {
             date: new Date().toISOString(),
-            image: imageURL || log[id]?.image || null
+            image: imageURL || log[id]?.image || null,
+            name: name || log[id]?.name || '(unknown)'
         };
         saveLog(log);
-        console.log(`[AssetLogger] logged asset ${id} at ${log[id].date}, image: ${log[id].image || "none"}`);
+        console.log(`[AssetLogger] logged asset ${id} at ${log[id].date}, name: ${log[id].name}, image: ${log[id].image || "none"}`);
     }
 
     function scanForAssets() {
         console.log('[AssetLogger] scanning for assets…');
-        const log = loadLog();
         document.querySelectorAll('[href]').forEach(el => {
-            const href = el.href;
-            let m = href.match(/(?:https?:\/\/create\.roblox\.com)?\/store\/asset\/(\d+)/);
-            if (!m) m = href.match(/\/dashboard\/creations\/store\/(\d+)\/configure/);
+            let m = el.href.match(/(?:https?:\/\/create\.roblox\.com)?\/store\/asset\/(\d+)/)
+                 || el.href.match(/\/dashboard\/creations\/store\/(\d+)\/configure/);
             if (m) {
                 const id = m[1];
+                // find optional image
                 let image = null;
-
                 const container = el.closest('*');
-                const img = container.querySelector('img');
-                if (img && img.src) {
-                    image = img.src;
-                }
+                const img = container?.querySelector('img');
+                if (img?.src) image = img.src;
+                // find the asset name in a span with MuiTypography-root
+                let name = null;
+                const nameEl = container?.querySelector('span.MuiTypography-root');
+                if (nameEl) name = nameEl.textContent.trim();
 
-                logAsset(id, image);
+                logAsset(id, image, name);
             }
         });
     }
@@ -133,7 +135,7 @@
             });
             if (resp.ok) {
                 const result = await resp.json();
-                if (result.assetId) logAsset(result.assetId, null);
+                if (result.assetId) logAsset(result.assetId, null, displayName);
                 completed++;
                 updateStatus();
                 return;
@@ -336,8 +338,9 @@
 body { font-family:Arial; padding:20px; background:#fff; color:#000; transition:background 0.3s, color 0.3s; }
 h1 { margin-bottom:10px; }
 ul { padding-left:20px; }
-li { margin-bottom:6px; display: flex; align-items: center; gap: 10px; }
+li { margin-bottom:10px; display: flex; flex-direction: column; gap: 4px; }
 img { max-height: 40px; border: 1px solid #ccc; }
+.asset-name { font-size: 90%; color: #333; margin-left: 20px; }
 button { margin-bottom: 10px; padding: 5px 10px; }
 </style></head><body>
 <button onclick="document.body.style.backgroundColor = (document.body.style.backgroundColor === 'black') ? 'white' : 'black'; document.body.style.color = (document.body.style.color === 'white') ? 'black' : 'white'; document.querySelectorAll('img').forEach(i => i.style.border = (document.body.style.backgroundColor === 'black') ? '1px solid #fff' : '1px solid #ccc');">
@@ -352,7 +355,10 @@ ${ entries.length ? `<ul>${entries.map(([id, entry]) => {
     } else {
         label = `<span>(in review/image declined)</span>`;
     }
-    return `<li>${label} <a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a> — ${entry.date}</li>`;
+    return `<li>
+        <div style="display:flex; align-items:center; gap:10px;">${label}<a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a> — ${entry.date}</div>
+        <div class="asset-name">${entry.name}</div>
+    </li>`;
 }).join('')}</ul>` : `<p><em>No assets logged yet.</em></p>` }
 </body></html>`);
             w.document.close();
@@ -401,7 +407,7 @@ ${ entries.length ? `<ul>${entries.map(([id, entry]) => {
         createUI();
         document.addEventListener('paste', handlePaste);
         scanForAssets();
-        console.log('[AnnaUploader] v5.3 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        console.log('[AnnaUploader] v5.4 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
 })();
