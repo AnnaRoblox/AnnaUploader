@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      4.8
+// @version      4.9
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -25,8 +25,9 @@
     const FORCED_NAME        = "Uploaded Using AnnaUploader";
 
     // Stored settings
-    let USER_ID        = GM_getValue('userId', null);
-    let useForcedName = false; // toggle: false => use file names, true => use FORCED_NAME
+    let USER_ID         = GM_getValue('userId', null);
+    let useForcedName   = false; // toggle: false => use file names, true => use FORCED_NAME
+    let useMakeUnique   = false; // toggle: false => upload as-is, true => tweak a random pixel for uniqueness
 
     // Mass-upload state
     let massMode     = false;
@@ -39,6 +40,7 @@
     let toggleBtn    = null;
     let startBtn     = null;
 
+    // Fetch CSRF token from Roblox
     async function fetchCSRFToken() {
         const resp = await fetch(ROBLOX_UPLOAD_URL, {
             method: 'POST',
@@ -57,6 +59,33 @@
         throw new Error('Cannot fetch CSRF token');
     }
 
+    // Modify one random pixel to a random color to force uniqueness
+    function makeUniqueFile(file) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = function() {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const x = Math.floor(Math.random() * canvas.width);
+                const y = Math.floor(Math.random() * canvas.height);
+                const r = Math.floor(Math.random() * 256);
+                const g = Math.floor(Math.random() * 256);
+                const b = Math.floor(Math.random() * 256);
+                ctx.fillStyle = `rgba(${r},${g},${b},1)`;
+                ctx.fillRect(x, y, 1, 1);
+                canvas.toBlob(blob => {
+                    const newFile = new File([blob], file.name, { type: file.type });
+                    resolve(newFile);
+                }, file.type);
+            };
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
+    // Core upload logic with retry & forced-name handling
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) await fetchCSRFToken();
         const displayName = forceName ? FORCED_NAME : file.name.split('.')[0];
@@ -68,9 +97,9 @@
             assetType: assetType === ASSET_TYPE_TSHIRT ? "TShirt" : "Decal",
             creationContext: { creator: { userId: USER_ID }, expectedPrice: 0 }
         }));
-
+        let resp;
         try {
-            const resp = await fetch(ROBLOX_UPLOAD_URL, {
+            resp = await fetch(ROBLOX_UPLOAD_URL, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'x-csrf-token': csrfToken },
@@ -82,25 +111,22 @@
                 updateStatus();
                 return;
             }
-
             const txt = await resp.text();
             let json; try { json = JSON.parse(txt); } catch{}
-            const badName = resp.status===400 && json?.message?.includes('moderated');
+            const badName = resp.status === 400 && json?.message?.includes('moderated');
             if (badName && retries < MAX_RETRIES && !forceName) {
-                await new Promise(r=>setTimeout(r, UPLOAD_RETRY_DELAY));
-                return uploadFile(file, assetType, retries+1, true);
+                await new Promise(r => setTimeout(r, UPLOAD_RETRY_DELAY));
+                return uploadFile(file, assetType, retries + 1, true);
             }
-            if (resp.status===403 && retries<MAX_RETRIES) {
+            if (resp.status === 403 && retries < MAX_RETRIES) {
                 csrfToken = null;
-                await new Promise(r=>setTimeout(r, UPLOAD_RETRY_DELAY));
-                return uploadFile(file, assetType, retries+1, forceName);
+                await new Promise(r => setTimeout(r, UPLOAD_RETRY_DELAY));
+                return uploadFile(file, assetType, retries + 1, forceName);
             }
-
             console.error(`❌ ${file.name}: [${resp.status}]`, txt);
-        } catch(e) {
+        } catch (e) {
             console.error('Upload error', e);
         } finally {
-            // even on error, count as “done” so status moves
             if (!resp?.ok) {
                 completed++;
                 updateStatus();
@@ -108,6 +134,7 @@
         }
     }
 
+    // Update on-screen status
     function updateStatus() {
         if (!statusEl) return;
         if (batchTotal > 0) {
@@ -119,47 +146,53 @@
         }
     }
 
-    function handleFileSelect(files, assetType, both=false) {
-        if (!files || files.length===0) return;
+    // Handle file selection / queuing / immediate upload
+    async function handleFileSelect(files, assetType, both = false) {
+        if (!files || files.length === 0) return;
+        // Queuing for mass-upload
         if (massMode) {
             for (let f of files) {
+                const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
                 if (both) {
-                    massQueue.push({f,type:ASSET_TYPE_TSHIRT});
-                    massQueue.push({f,type:ASSET_TYPE_DECAL});
+                    massQueue.push({ f: toUse, type: ASSET_TYPE_TSHIRT });
+                    massQueue.push({ f: toUse, type: ASSET_TYPE_DECAL });
                 } else {
-                    massQueue.push({f,type:assetType});
+                    massQueue.push({ f: toUse, type: assetType });
                 }
             }
             updateStatus();
             return;
         }
-
-        // immediate parallel upload
+        // Immediate parallel upload
         const tasks = [];
-        batchTotal = both ? files.length*2 : files.length;
+        batchTotal = both ? files.length * 2 : files.length;
         completed = 0;
         updateStatus();
         for (let f of files) {
+            const toUse = useMakeUnique ? await makeUniqueFile(f) : f;
             if (both) {
-                tasks.push(uploadFile(f, ASSET_TYPE_TSHIRT, 0, useForcedName));
-                tasks.push(uploadFile(f, ASSET_TYPE_DECAL, 0, useForcedName));
+                tasks.push(uploadFile(toUse, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                tasks.push(uploadFile(toUse, ASSET_TYPE_DECAL, 0, useForcedName));
             } else {
-                tasks.push(uploadFile(f, assetType, 0, useForcedName));
+                tasks.push(uploadFile(toUse, assetType, 0, useForcedName));
             }
         }
-        Promise.all(tasks).then(()=>console.log('[Uploader] done'));
+        Promise.all(tasks).then(() => console.log('[Uploader] done'));
     }
 
+    // Process the queued mass-upload items
     function startMassUpload() {
-        if (massQueue.length===0) return alert('Nothing queued!');
+        if (massQueue.length === 0) return alert('Nothing queued!');
         batchTotal = massQueue.length;
         completed = 0;
         updateStatus();
 
-        const tasks = massQueue.map(item => uploadFile(item.f, item.type, 0, useForcedName));
+        const tasks = massQueue.map(item =>
+            uploadFile(item.f, item.type, 0, useForcedName)
+        );
         massQueue = [];
         updateStatus();
-        Promise.all(tasks).then(()=>{
+        Promise.all(tasks).then(() => {
             alert('Mass upload complete!');
             toggleBtn.textContent = 'Enable Mass Upload';
             massMode = false;
@@ -167,21 +200,22 @@
         });
     }
 
+    // Build the little UI panel
     function createUploaderUI() {
         const c = document.createElement('div');
         Object.assign(c.style, {
             position:'fixed', top:'10px', right:'10px',
             background:'#fff', border:'2px solid #000', padding:'15px',
             zIndex:'10000', borderRadius:'8px', boxShadow:'0 4px 8px rgba(0,0,0,0.2)',
-            display:'flex', flexDirection:'column', gap:'8px', fontFamily:'Arial', width:'240px'
+            display:'flex', flexDirection:'column', gap:'8px', fontFamily:'Arial', width:'260px'
         });
 
-        // Close button
+        // Close
         const close = document.createElement('button');
         close.textContent = '×';
         Object.assign(close.style, {
-            position: 'absolute', top: '5px', right: '8px',
-            background: 'transparent', border: 'none', fontSize: '16px', cursor: 'pointer'
+            position:'absolute', top:'5px', right:'8px',
+            background:'transparent', border:'none', fontSize:'16px', cursor:'pointer'
         });
         close.title = 'Close';
         close.onclick = () => c.remove();
@@ -194,28 +228,28 @@
         title.style.fontSize = '16px';
         c.appendChild(title);
 
-        // Buttons factory
+        // Button factory
         const makeBtn = (txt, fn) => {
             const b = document.createElement('button');
             b.textContent = txt;
-            Object.assign(b.style, { padding: '8px', cursor: 'pointer' });
+            Object.assign(b.style, { padding:'8px', cursor:'pointer' });
             b.onclick = fn;
             return b;
         };
 
-        // Upload controls
+        // Upload buttons
         c.appendChild(makeBtn('Upload T-Shirts', () => {
-            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+            const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true;
             inp.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             inp.click();
         }));
         c.appendChild(makeBtn('Upload Decals', () => {
-            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+            const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true;
             inp.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             inp.click();
         }));
         c.appendChild(makeBtn('Upload Both', () => {
-            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+            const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.multiple=true;
             inp.onchange = e => handleFileSelect(e.target.files, null, true);
             inp.click();
         }));
@@ -231,19 +265,26 @@
         });
         c.appendChild(toggleBtn);
 
-        // Start button
+        // Start mass-upload
         startBtn = makeBtn('Start Mass Upload', startMassUpload);
         startBtn.style.display = 'none';
         c.appendChild(startBtn);
 
-        // Forced name toggle
+        // Forced-name toggle
         const nameToggleBtn = makeBtn(`Use default Name: Off`, () => {
             useForcedName = !useForcedName;
             nameToggleBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
         });
         c.appendChild(nameToggleBtn);
 
-        // Change ID
+        // Make-unique toggle
+        const uniqueToggleBtn = makeBtn(`Slip Mode: Off`, () => {
+            useMakeUnique = !useMakeUnique;
+            uniqueToggleBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
+        });
+        c.appendChild(uniqueToggleBtn);
+
+        // Change user ID
         c.appendChild(makeBtn('Change ID', () => {
             const inp = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
             if (!inp) return;
@@ -256,7 +297,7 @@
             } else alert('Invalid input.');
         }));
 
-        // Profile shortcut
+        // Use profile shortcut
         const pm = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
         if (pm) {
             c.appendChild(makeBtn('Use This Profile as ID', () => {
@@ -279,6 +320,7 @@
         document.body.appendChild(c);
     }
 
+    // Handle clipboard paste uploads
     function handlePaste(e) {
         const items = e.clipboardData?.items;
         if (!items) return;
@@ -305,10 +347,11 @@
         }
     }
 
+    // Initialize on page load
     window.addEventListener('load', () => {
         createUploaderUI();
         document.addEventListener('paste', handlePaste);
-        console.log('[AnnaUploader] initialized, massMode=', massMode, 'useForcedName=', useForcedName);
+        console.log('[AnnaUploader] initialized, massMode=', massMode, 'useForcedName=', useForcedName, 'useMakeUnique=', useMakeUnique);
     });
 
 })();
