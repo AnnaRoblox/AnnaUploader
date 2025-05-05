@@ -2,7 +2,7 @@
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
 // @version      5.6
-// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader; retries with default name on name-too-long errors
+// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
 // @run-at       document-idle
@@ -174,7 +174,7 @@
                 ctx.fillRect(x, y, 1, 1);
                 canvas.toBlob(blob => {
                     const ext = file.name.split('.').pop();
-                    const newName = `${origBase}_variant${copyIndex}.${ext}`;
+                    const newName = `${origBase}_${copyIndex}.${ext}`;
                     resolve(new File([blob], newName, { type: file.type }));
                 }, file.type);
             };
