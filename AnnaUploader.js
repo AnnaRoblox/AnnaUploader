@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.6
+// @version      5.7
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -159,6 +159,7 @@
         }
     }
 
+    // Slip Mode: subtly randomize ALL non-transparent pixels by ±1 per channel
     function makeUniqueFile(file, origBase, copyIndex) {
         return new Promise(resolve => {
             const img = new Image();
@@ -168,10 +169,21 @@
                 canvas.height = img.height;
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0);
-                const x = Math.floor(Math.random() * canvas.width);
-                const y = Math.floor(Math.random() * canvas.height);
-                ctx.fillStyle = `rgba(${Math.random()*255|0},${Math.random()*255|0},${Math.random()*255|0},1)`;
-                ctx.fillRect(x, y, 1, 1);
+
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    // Only tweak non-transparent pixels
+                    if (data[i + 3] !== 0) {
+                        // delta is either -1 or +1, randomly
+                        const delta = Math.random() < 0.5 ? -1 : 1;
+                        data[i]   = Math.min(255, Math.max(0, data[i]   + delta));
+                        data[i+1] = Math.min(255, Math.max(0, data[i+1] + delta));
+                        data[i+2] = Math.min(255, Math.max(0, data[i+2] + delta));
+                    }
+                }
+                ctx.putImageData(imageData, 0, 0);
+
                 canvas.toBlob(blob => {
                     const ext = file.name.split('.').pop();
                     const newName = `${origBase}_${copyIndex}.${ext}`;
@@ -443,7 +455,7 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>`
         createUI();
         document.addEventListener('paste', handlePaste);
         scanForAssets();
-        console.log('[AnnaUploader] v5.6 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        console.log('[AnnaUploader] v5.6.2 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
 })();
