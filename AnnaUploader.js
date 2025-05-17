@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AnnaUploader (Roblox Multi-File Uploader)
-// @namespace    https://www.guilded.gg/u/AnnaBlox
-// @version      5.7
+// @namespace    https://github.com/AnnaRoblox
+// @version      5.8
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
@@ -272,24 +272,46 @@
     function createUI() {
         const c = document.createElement('div');
         Object.assign(c.style, {
-            position:'fixed', top:'10px', right:'10px', width:'260px',
-            background:'#fff', border:'2px solid #000', padding:'15px',
-            zIndex:10000, borderRadius:'8px', boxShadow:'0 4px 8px rgba(0,0,0,0.2)',
-            display:'flex', flexDirection:'column', gap:'8px', fontFamily:'Arial'
+            position: 'fixed',
+            top: '10px',
+            right: '10px',
+            width: '260px',
+            background: '#000',
+            border: '2px solid #000',
+            color: '#fff',
+            padding: '15px',
+            zIndex: 10000,
+            borderRadius: '8px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.2)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            fontFamily: 'Arial'
         });
 
         function btn(text, fn) {
             const b = document.createElement('button');
             b.textContent = text;
-            Object.assign(b.style, { padding:'8px', cursor:'pointer' });
+            Object.assign(b.style, {
+                padding: '8px',
+                cursor: 'pointer',
+                color: '#fff',
+                background: '#000',
+                border: '1px solid #555',
+                borderRadius: '4px'
+            });
             b.onclick = fn;
             return b;
         }
 
         const close = btn('×', () => c.remove());
         Object.assign(close.style, {
-            position:'absolute', top:'5px', right:'8px',
-            background:'transparent', border:'none', fontSize:'16px'
+            position: 'absolute',
+            top: '5px',
+            right: '8px',
+            background: 'transparent',
+            border: 'none',
+            fontSize: '16px'
         });
         close.title = 'Close';
         c.appendChild(close);
@@ -297,23 +319,24 @@
         const title = document.createElement('h3');
         title.textContent = 'AnnaUploader';
         title.style.margin = '0 0 5px 0';
+        title.style.color = '#fff';
         c.appendChild(title);
 
         c.appendChild(btn('Upload T-Shirts', () => {
             const i = document.createElement('input');
-            i.type='file'; i.accept='image/*'; i.multiple=true;
+            i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             i.click();
         }));
         c.appendChild(btn('Upload Decals', () => {
             const i = document.createElement('input');
-            i.type='file'; i.accept='image/*'; i.multiple=true;
+            i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             i.click();
         }));
         c.appendChild(btn('Upload Both', () => {
             const i = document.createElement('input');
-            i.type='file'; i.accept='image/*'; i.multiple=true;
+            i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, null, true);
             i.click();
         }));
@@ -332,13 +355,13 @@
 
         const nameBtn = btn('Use default Name: Off', () => {
             useForcedName = !useForcedName;
-            nameBtn.textContent = `Use default Name: ${useForcedName?'On':'Off'}`;
+            nameBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
         });
         c.appendChild(nameBtn);
 
         const slipBtn = btn('Slip Mode: Off', () => {
             useMakeUnique = !useMakeUnique;
-            slipBtn.textContent = `Slip Mode: ${useMakeUnique?'On':'Off'}`;
+            slipBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
             copiesInput.style.display = useMakeUnique ? 'block' : 'none';
             downloadBtn.style.display = useMakeUnique ? 'block' : 'none';
             if (!useMakeUnique) {
@@ -349,25 +372,25 @@
         c.appendChild(slipBtn);
 
         copiesInput = document.createElement('input');
-        copiesInput.type='number'; copiesInput.min='1'; copiesInput.value=uniqueCopies;
-        copiesInput.style.width='100%'; copiesInput.style.boxSizing='border-box';
-        copiesInput.style.display='none';
+        copiesInput.type = 'number'; copiesInput.min = '1'; copiesInput.value = uniqueCopies;
+        copiesInput.style.width = '100%'; copiesInput.style.boxSizing = 'border-box';
+        copiesInput.style.display = 'none';
         copiesInput.onchange = e => {
-            const v = parseInt(e.target.value,10);
-            if (v>0) uniqueCopies = v;
+            const v = parseInt(e.target.value, 10);
+            if (v > 0) uniqueCopies = v;
             else e.target.value = uniqueCopies;
         };
         c.appendChild(copiesInput);
 
         downloadBtn = btn('Download Images: Off', () => {
             useDownload = !useDownload;
-            downloadBtn.textContent = `Download Images: ${useDownload?'On':'Off'}`;
+            downloadBtn.textContent = `Download Images: ${useDownload ? 'On' : 'Off'}`;
         });
         downloadBtn.style.display = 'none';
         c.appendChild(downloadBtn);
 
         c.appendChild(btn('Change ID', () => {
-            const inp = prompt("Enter your Roblox User ID or Profile URL:", USER_ID||'');
+            const inp = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
             if (!inp) return;
             const m = inp.match(/users\/(\d+)/);
             const id = m ? m[1] : inp.trim();
@@ -394,21 +417,21 @@
             w.document.write(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Logged Assets</title>
 <style>
-body { font-family:Arial; padding:20px; background:#fff; color:#000; transition:background 0.3s, color 0.3s; }
+body { font-family:Arial; padding:20px; background:#000; color:#fff; transition:background 0.3s, color 0.3s; }
 h1 { margin-bottom:10px; }
 ul { padding-left:20px; }
 li { margin-bottom:10px; }
-img { max-height:40px; border:1px solid #ccc; }
-.asset-name { font-size:90%; color:#333; margin-left:20px; }
-button { margin-bottom:10px; }
+img { max-height:40px; border:1px solid #fff; }
+.asset-name { font-size:90%; color:#ccc; margin-left:20px; }
+button { margin-bottom:10px; color:#fff; background:#222; border:1px solid #555; padding:5px 10px; border-radius:4px; }
 </style></head><body>
 <button onclick="document.body.style.background=(document.body.style.background==='black'?'white':'black');document.body.style.color=(document.body.style.color==='white'?'black':'white');document.querySelectorAll('img').forEach(i=>i.style.border=(document.body.style.background==='black'?'1px solid #fff':'1px solid #ccc'));">Toggle Background</button>
 <h1>Logged Assets</h1>
-${ entries.length ? `<ul>${entries.map(([id,entry])=>`
-  <li>
+${ entries.length ? `<ul>${entries.map(([id,entry])=>
+  `<li>
     <div style="display:flex;align-items:center;gap:10px;">
-      ${ entry.image ? `<img src="${entry.image}" alt> ` : `<span>(no image)</span>` }
-      <a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a> — ${entry.date}
+      ${ entry.image ? `<img src="${entry.image}" alt>`  : `<span>(no image)</span>` }
+      <a href="https://create.roblox.com/store/asset/${id}" target="_blank" style="color:#4af;">${id}</a> — ${entry.date}
     </div>
     <div class="asset-name">${entry.name}</div>
   </li>`).join('') }</ul>` : `<p><em>No assets logged yet.</em></p>`}
@@ -418,11 +441,11 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>`
 
         const hint = document.createElement('div');
         hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
-        hint.style.fontSize='12px'; hint.style.color='#555';
+        hint.style.fontSize = '12px'; hint.style.color = '#aaa';
         c.appendChild(hint);
 
         statusEl = document.createElement('div');
-        statusEl.style.fontSize='12px'; statusEl.style.color='#000';
+        statusEl.style.fontSize = '12px'; statusEl.style.color = '#fff';
         c.appendChild(statusEl);
 
         document.body.appendChild(c);
@@ -455,7 +478,7 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>`
         createUI();
         document.addEventListener('paste', handlePaste);
         scanForAssets();
-        console.log('[AnnaUploader] v5.6.2 initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        console.log('[AnnaUploader] initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
 })();
