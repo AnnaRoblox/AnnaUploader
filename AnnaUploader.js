@@ -1,18 +1,19 @@
 // ==UserScript==
-// @name         AnnaUploader (Roblox Multi-File Uploader)
+// @name         AnnaUploader (Roblox Multi-File Uploader) with Group Support
 // @namespace    https://github.com/AnnaRoblox
-// @version      5.8
-// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
+// @version      5.9
+// @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader, now supporting groups
 // @match        https://create.roblox.com/*
 // @match        https://www.roblox.com/users/*/profile*
+// @match        https://www.roblox.com/communities/*
 // @run-at       document-idle
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
+// @license      MIT
 // @downloadURL  https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
 // @updateURL    https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
-// @license      MIT
 // ==/UserScript==
 
 (function() {
@@ -26,7 +27,8 @@
     const STORAGE_KEY = 'annaUploaderAssetLog';
     const SCAN_INTERVAL_MS = 10_000;
 
-    let USER_ID = GM_getValue('userId', null);
+    let USER_ID   = GM_getValue('userId', null);
+    let IS_GROUP  = GM_getValue('isGroup', false);
     let useForcedName = false;
     let useMakeUnique = false;
     let uniqueCopies = 1;
@@ -112,13 +114,17 @@
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) await fetchCSRFToken();
         const displayName = forceName ? FORCED_NAME : baseName(file.name);
+        const creator = IS_GROUP
+            ? { groupId: USER_ID }
+            : { userId: USER_ID };
+
         const fd = new FormData();
         fd.append('fileContent', file, file.name);
         fd.append('request', JSON.stringify({
             displayName,
             description: FORCED_NAME,
             assetType: assetType === ASSET_TYPE_TSHIRT ? "TShirt" : "Decal",
-            creationContext: { creator: { userId: USER_ID }, expectedPrice: 0 }
+            creationContext: { creator, expectedPrice: 0 }
         }));
         try {
             const resp = await fetch(ROBLOX_UPLOAD_URL, {
@@ -134,16 +140,13 @@
                 updateStatus();
                 return;
             }
-            // If name-too-long error, retry with default name
             if (json?.message === 'Asset name length is invalid.' && !forceName && retries < 5) {
                 console.warn('[Upload] name too long, retrying with default name');
                 return uploadFile(file, assetType, retries + 1, true);
             }
-            // Moderation error: try forced name
             if (resp.status === 400 && json?.message?.includes('moderated') && retries < 5) {
                 return uploadFile(file, assetType, retries + 1, true);
             }
-            // CSRF expired: retry
             if (resp.status === 403 && retries < 5) {
                 csrfToken = null;
                 return uploadFile(file, assetType, retries + 1, forceName);
@@ -173,9 +176,7 @@
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imageData.data;
                 for (let i = 0; i < data.length; i += 4) {
-                    // Only tweak non-transparent pixels
                     if (data[i + 3] !== 0) {
-                        // delta is either -1 or +1, randomly
                         const delta = Math.random() < 0.5 ? -1 : 1;
                         data[i]   = Math.min(255, Math.max(0, data[i]   + delta));
                         data[i+1] = Math.min(255, Math.max(0, data[i+1] + delta));
@@ -183,7 +184,6 @@
                     }
                 }
                 ctx.putImageData(imageData, 0, 0);
-
                 canvas.toBlob(blob => {
                     const ext = file.name.split('.').pop();
                     const newName = `${origBase}_${copyIndex}.${ext}`;
@@ -389,24 +389,50 @@
         downloadBtn.style.display = 'none';
         c.appendChild(downloadBtn);
 
+        // Change ID button
         c.appendChild(btn('Change ID', () => {
-            const inp = prompt("Enter your Roblox User ID or Profile URL:", USER_ID || '');
+            const inp = prompt("Enter your Roblox User ID/URL or Group URL:", USER_ID || '');
             if (!inp) return;
-            const m = inp.match(/users\/(\d+)/);
-            const id = m ? m[1] : inp.trim();
-            if (!isNaN(id)) {
-                USER_ID = Number(id);
-                GM_setValue('userId', USER_ID);
-                alert(`User ID set to ${USER_ID}`);
-            } else alert('Invalid input.');
+            let id, isGrp = false;
+            const um = inp.match(/users\/(\d+)/);
+            const gm = inp.match(/communities\/(\d+)/);
+            if (um) {
+                id = um[1];
+            } else if (gm) {
+                id = gm[1];
+                isGrp = true;
+            } else {
+                id = inp.trim();
+                if (isNaN(id)) return alert('Invalid input.');
+            }
+            USER_ID = Number(id);
+            IS_GROUP = isGrp;
+            GM_setValue('userId', USER_ID);
+            GM_setValue('isGroup', IS_GROUP);
+            alert(`Set to ${isGrp ? 'Group' : 'User'} ID: ${USER_ID}`);
         }));
 
+        // "Use This Profile as ID"
         const pm = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
         if (pm) {
             c.appendChild(btn('Use This Profile as ID', () => {
                 USER_ID = Number(pm[1]);
+                IS_GROUP = false;
                 GM_setValue('userId', USER_ID);
+                GM_setValue('isGroup', IS_GROUP);
                 alert(`User ID set to ${USER_ID}`);
+            }));
+        }
+
+        // "Use This Group as ID"
+        const gm = window.location.pathname.match(/^\/communities\/(\d+)/);
+        if (gm) {
+            c.appendChild(btn('Use This Group as ID', () => {
+                USER_ID = Number(gm[1]);
+                IS_GROUP = true;
+                GM_setValue('userId', USER_ID);
+                GM_setValue('isGroup', IS_GROUP);
+                alert(`Group ID set to ${USER_ID}`);
             }));
         }
 
