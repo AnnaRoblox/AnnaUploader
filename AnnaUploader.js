@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         AnnaUploader (Roblox Multi-File Uploader) with Group Support
+// @name         AnnaUploader (Roblox Multi-File Uploader)
 // @namespace    https://github.com/AnnaRoblox
 // @version      5.9
 // @description  allows you to upload multiple T-Shirts/Decals easily with AnnaUploader, now supporting groups
