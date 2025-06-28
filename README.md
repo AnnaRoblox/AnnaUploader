@@ -9,3 +9,4 @@ fallback name in cases of the filename being moderated or too long
 
 UserScript:
 https://greasyfork.org/en/scripts/534460-annauploader-roblox-multi-file-uploader
+![image](https://github.com/user-attachments/assets/729ee032-c76c-4059-b5a1-5e604ed98c25)
