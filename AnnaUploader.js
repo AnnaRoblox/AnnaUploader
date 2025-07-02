@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.0
+// @version     6.1
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
 // @match       https://www.roblox.com/communities/*
+// @match       https://www.roblox.com/home/*
 // @run-at      document-idle
 // @grant       GM_getValue
 // @grant       GM_setValue
@@ -36,6 +37,7 @@
     let useMakeUnique = false;
     let uniqueCopies  = 1;
     let useDownload   = false;
+    let useForceCanvasUpload = false; // New: Toggle for force canvas processing
 
     // Mass upload mode variables
     let massMode    = false; // True if mass upload mode is active
@@ -44,7 +46,7 @@
     let completed   = 0;     // Number of items completed in current batch/queue
 
     let csrfToken = null; // Roblox CSRF token for authenticated requests
-    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn; // UI elements
+    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn, forceUploadBtn; // UI elements
 
     /**
      * Utility function to extract the base name of a filename (without extension).
@@ -238,6 +240,71 @@
     }
 
     /**
+     * Converts a WebP image File to a PNG File.
+     * @param {File} webpFile The WebP file to convert.
+     * @returns {Promise<File>} A promise that resolves with the converted PNG File object.
+     */
+    function convertWebPToPng(webpFile) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                canvas.toBlob(blob => {
+                    if (blob) {
+                        const newFileName = webpFile.name.replace(/\.webp$/, '.png');
+                        resolve(new File([blob], newFileName, { type: 'image/png' }));
+                    } else {
+                        reject(new Error('Failed to convert WebP to PNG blob.'));
+                    }
+                }, 'image/png');
+            };
+            img.onerror = (e) => {
+                reject(new Error(`Failed to load image for conversion: ${e.message}`));
+            };
+            img.src = URL.createObjectURL(webpFile);
+        });
+    }
+
+    /**
+     * Processes an image file through a canvas, re-encoding it to the target type (defaulting to PNG).
+     * This can fix issues with malformed image data or incorrect MIME types.
+     * @param {File} file The original image file.
+     * @param {string} targetType The desired output MIME type (e.g., 'image/png').
+     * @returns {Promise<File>} A promise that resolves with the new, re-encoded File object.
+     */
+    function processImageThroughCanvas(file, targetType = 'image/png') {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                canvas.toBlob(blob => {
+                    if (blob) {
+                        // Preserve original base name, but update extension and type
+                        const newFileName = baseName(file.name) + (targetType === 'image/png' ? '.png' : '.jpeg'); // Simple extension logic
+                        resolve(new File([blob], newFileName, { type: targetType }));
+                    } else {
+                        reject(new Error('Failed to process image through canvas.'));
+                    }
+                }, targetType);
+            };
+            img.onerror = (e) => {
+                reject(new Error(`Failed to load image for canvas processing: ${e.message}`));
+            };
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
+    /**
      * "Slip Mode": subtly randomizes ALL non-transparent pixels by ±1 per channel.
      * This creates unique images to bypass potential Roblox duplicate detection.
      * @param {File} file The original image file.
@@ -268,10 +335,10 @@
                 ctx.putImageData(imageData, 0, 0); // Put modified data back to canvas
 
                 canvas.toBlob(blob => {
-                    const ext = file.name.split('.').pop(); // Get original extension
+                    const ext = 'png'; // Always output PNG after processing, especially if converted from WebP
                     const newName = `${origBase}_${copyIndex}.${ext}`; // Create new name with index
-                    resolve(new File([blob], newName, { type: file.type })); // Resolve with new File object
-                }, file.type); // Preserve original file type
+                    resolve(new File([blob], newName, { type: 'image/png' })); // Resolve with new File object as PNG
+                }, 'image/png'); // Always convert to PNG
             };
             img.src = URL.createObjectURL(file); // Load image from file blob URL
         });
@@ -295,20 +362,49 @@
             displayMessage('Processing files to add to queue...', 'info');
             const processingTasks = [];
             for (const original of files) {
-                const origBase = baseName(original.name);
+                let fileToProcess = original;
+
+                // 1. WebP Conversion (always happens first if needed)
+                if (original.type === 'image/webp') {
+                    displayMessage(`Converting ${original.name} from WebP to PNG...`, 'info');
+                    try {
+                        fileToProcess = await convertWebPToPng(original);
+                        displayMessage(`${original.name} converted to PNG.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to convert ${original.name}: ${error.message}`, 'error');
+                        console.error(`[Conversion] Failed to convert ${original.name}:`, error);
+                        continue; // Skip this file if conversion fails
+                    }
+                }
+
+                // 2. Force Canvas Upload (if enabled AND not already handled by makeUniqueFile)
+                // If useMakeUnique is true, makeUniqueFile already processes through canvas, so no need to double process.
+                let fileAfterCanvasProcessing = fileToProcess;
+                if (useForceCanvasUpload && !useMakeUnique) {
+                    displayMessage(`Processing ${fileToProcess.name} through canvas...`, 'info');
+                    try {
+                        fileAfterCanvasProcessing = await processImageThroughCanvas(fileToProcess);
+                        displayMessage(`${fileToProcess.name} processed through canvas.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to process ${fileToProcess.name} through canvas: ${error.message}`, 'error');
+                        console.error(`[Canvas Process] Failed to process ${fileToProcess.name}:`, error);
+                        continue; // Skip this file if canvas processing fails
+                    }
+                }
+
+                const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
                 for (let i = 1; i <= copies; i++) {
                     processingTasks.push(
                         (async () => {
-                            const filePromise = useMakeUnique
-                                ? makeUniqueFile(original, origBase, i)
-                                : Promise.resolve(original);
+                            const fileForQueue = useMakeUnique
+                                ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
+                                : fileAfterCanvasProcessing; // Use the file after potential canvas processing
 
-                            const fileToQueue = await filePromise;
                             if (both) {
-                                massQueue.push({ f: fileToQueue, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
-                                massQueue.push({ f: fileToQueue, type: ASSET_TYPE_DECAL, forceName: useForcedName });
+                                massQueue.push({ f: fileForQueue, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
+                                massQueue.push({ f: fileForQueue, type: ASSET_TYPE_DECAL, forceName: useForcedName });
                             } else {
-                                massQueue.push({ f: fileToQueue, type: assetType, forceName: useForcedName });
+                                massQueue.push({ f: fileForQueue, type: assetType, forceName: useForcedName });
                             }
                         })()
                     );
@@ -328,15 +424,42 @@
             const uploadPromises = []; // Array to hold upload promises
 
             for (const original of files) {
-                const origBase = baseName(original.name);
+                let fileToProcess = original;
+
+                // 1. WebP Conversion (always happens first if needed)
+                if (original.type === 'image/webp') {
+                    displayMessage(`Converting ${original.name} from WebP to PNG...`, 'info');
+                    try {
+                        fileToProcess = await convertWebPToPng(original);
+                        displayMessage(`${original.name} converted to PNG.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to convert ${original.name}: ${error.message}`, 'error');
+                        console.error(`[Conversion] Failed to convert ${original.name}:`, error);
+                        continue; // Skip this file if conversion fails
+                    }
+                }
+
+                // 2. Force Canvas Upload (if enabled AND not already handled by makeUniqueFile)
+                let fileAfterCanvasProcessing = fileToProcess;
+                if (useForceCanvasUpload && !useMakeUnique) {
+                    displayMessage(`Processing ${fileToProcess.name} through canvas...`, 'info');
+                    try {
+                        fileAfterCanvasProcessing = await processImageThroughCanvas(fileToProcess);
+                        displayMessage(`${fileToProcess.name} processed through canvas.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to process ${fileToProcess.name} through canvas: ${error.message}`, 'error');
+                        console.error(`[Canvas Process] Failed to process ${fileToProcess.name}:`, error);
+                        continue; // Skip this file if canvas processing fails
+                    }
+                }
+
+                const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
                 downloadsMap[origBase] = []; // Initialize for potential downloads
 
                 for (let i = 1; i <= copies; i++) {
-                    const filePromise = useMakeUnique
-                        ? makeUniqueFile(original, origBase, i)
-                        : Promise.resolve(original);
-
-                    const fileToUpload = await filePromise; // Get the processed file
+                    const fileToUpload = useMakeUnique
+                        ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
+                        : fileAfterCanvasProcessing; // Get the processed file
 
                     if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
                     if (both) {
@@ -740,6 +863,14 @@
         downloadBtn.style.display = 'none'; // Initially hidden
         c.appendChild(downloadBtn);
 
+        // New: Force Upload (through Canvas) toggle
+        forceUploadBtn = btn(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
+            useForceCanvasUpload = !useForceCanvasUpload;
+            forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
+            displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
+        });
+        c.appendChild(forceUploadBtn);
+
         // Change ID button
         c.appendChild(btn('Change ID', async () => {
             const inp = await customPrompt("Enter your Roblox User ID/URL or Group URL:", USER_ID || '');
@@ -859,8 +990,44 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
 
                 const pastedName = await customPrompt('Enter a name for the image (no extension):', `pasted_${ts}`);
                 if (pastedName === null) return; // User cancelled
-                const name = pastedName.trim() || `pasted_${ts}`;
-                const filename = name.endsWith('.png') ? name : `${name}.png`;
+                let name = pastedName.trim() || `pasted_${ts}`;
+                let filename = name.endsWith('.png') ? name : `${name}.png`; // Default to PNG
+
+                let fileToProcess = new File([blob], filename, {type: blob.type});
+
+                // 1. WebP Conversion (always happens first if needed)
+                if (blob.type === 'image/webp') {
+                    displayMessage(`Converting pasted WebP image to PNG...`, 'info');
+                    try {
+                        fileToProcess = await convertWebPToPng(fileToProcess);
+                        // Update filename and type to reflect PNG
+                        name = baseName(fileToProcess.name); // Get base name from the new PNG file
+                        filename = fileToProcess.name; // Use the full name of the new PNG file
+                        displayMessage(`Pasted WebP converted to PNG.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to convert pasted WebP: ${error.message}`, 'error');
+                        console.error(`[Conversion] Failed to convert pasted WebP:`, error);
+                        return; // Stop processing this paste if conversion fails
+                    }
+                }
+
+                // 2. Force Canvas Upload (if enabled AND not already handled by makeUniqueFile)
+                // For pasted images, makeUniqueFile is not directly called here, so always apply if force upload is on.
+                if (useForceCanvasUpload) {
+                    displayMessage(`Processing pasted image through canvas...`, 'info');
+                    try {
+                        fileToProcess = await processImageThroughCanvas(fileToProcess);
+                        // Update filename and type to reflect PNG after canvas processing
+                        name = baseName(fileToProcess.name);
+                        filename = fileToProcess.name;
+                        displayMessage(`Pasted image processed through canvas.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to process pasted image through canvas: ${error.message}`, 'error');
+                        console.error(`[Canvas Process] Failed to process pasted image:`, error);
+                        return; // Stop processing this paste if canvas processing fails
+                    }
+                }
+
 
                 const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, or C=Cancel?', 'D');
                 if (!typeChoice) return; // User cancelled
@@ -873,7 +1040,7 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
                 }
 
                 // Process the pasted file like any other selected file
-                handleFileSelect([new File([blob], filename, {type: blob.type})], type);
+                handleFileSelect([fileToProcess], type);
                 break; // Process only the first image found
             }
         }
