@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.1
+// @version     6.2
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -1028,19 +1028,27 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
                     }
                 }
 
-
-                const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, or C=Cancel?', 'D');
+                // Modified: Added 'B' option for 'both'
+                const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, B=Both, or C=Cancel?', 'D');
                 if (!typeChoice) return; // User cancelled
                 const t = typeChoice.trim().toUpperCase();
-                const type = t === 'T' ? ASSET_TYPE_TSHIRT : t === 'D' ? ASSET_TYPE_DECAL : null;
 
-                if (!type) {
-                    displayMessage('Invalid asset type selected. Please choose T or D.', 'error');
+                let uploadAsBoth = false;
+                let type = null;
+
+                if (t === 'T') {
+                    type = ASSET_TYPE_TSHIRT;
+                } else if (t === 'D') {
+                    type = ASSET_TYPE_DECAL;
+                } else if (t === 'B') {
+                    uploadAsBoth = true;
+                } else {
+                    displayMessage('Invalid asset type selected. Please choose T, D, or B.', 'error');
                     return;
                 }
 
                 // Process the pasted file like any other selected file
-                handleFileSelect([fileToProcess], type);
+                handleFileSelect([fileToProcess], type, uploadAsBoth);
                 break; // Process only the first image found
             }
         }
