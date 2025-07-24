@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.3
+// @version     6.4
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -48,6 +48,9 @@
     let csrfToken = null; // Roblox CSRF token for authenticated requests
     let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn, forceUploadBtn; // UI elements
     let uiContainer; // Reference to the main UI container element
+
+    // Define the batch size for makeUniqueFile operations
+    const MAKE_UNIQUE_BATCH_SIZE = 10;
 
     /**
      * Utility function to extract the base name of a filename (without extension).
@@ -394,25 +397,38 @@
                 }
 
                 const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
-                for (let i = 1; i <= copies; i++) {
-                    processingTasks.push(
-                        (async () => {
-                            const fileForQueue = useMakeUnique
-                                ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
-                                : fileAfterCanvasProcessing; // Use the file after potential canvas processing
 
+                // Batch makeUniqueFile operations
+                if (useMakeUnique) {
+                    const uniqueFilePromises = [];
+                    for (let i = 1; i <= copies; i++) {
+                        uniqueFilePromises.push(makeUniqueFile(fileAfterCanvasProcessing, origBase, i));
+                    }
+
+                    // Process unique files in batches
+                    for (let i = 0; i < uniqueFilePromises.length; i += MAKE_UNIQUE_BATCH_SIZE) {
+                        const batch = uniqueFilePromises.slice(i, i + MAKE_UNIQUE_BATCH_SIZE);
+                        const uniqueFilesBatch = await Promise.all(batch);
+                        uniqueFilesBatch.forEach(fileForQueue => {
                             if (both) {
                                 massQueue.push({ f: fileForQueue, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
                                 massQueue.push({ f: fileForQueue, type: ASSET_TYPE_DECAL, forceName: useForcedName });
                             } else {
                                 massQueue.push({ f: fileForQueue, type: assetType, forceName: useForcedName });
                             }
-                        })()
-                    );
+                        });
+                    }
+                } else {
+                    // If not making unique, just add the processed file
+                    if (both) {
+                        massQueue.push({ f: fileAfterCanvasProcessing, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
+                        massQueue.push({ f: fileAfterCanvasProcessing, type: ASSET_TYPE_DECAL, forceName: useForcedName });
+                    } else {
+                        massQueue.push({ f: fileAfterCanvasProcessing, type: assetType, forceName: useForcedName });
+                    }
                 }
             }
-            await Promise.all(processingTasks); // Wait for all files to be processed and queued
-            displayMessage(`${processingTasks.length} files added to queue!`, 'success');
+            displayMessage(`${massQueue.length} files added to queue!`, 'success');
             updateStatus(); // Update status to show queued items
         } else {
             // Not in mass mode, proceed with immediate upload
@@ -457,17 +473,35 @@
                 const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
                 downloadsMap[origBase] = []; // Initialize for potential downloads
 
-                for (let i = 1; i <= copies; i++) {
-                    const fileToUpload = useMakeUnique
-                        ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
-                        : fileAfterCanvasProcessing; // Get the processed file
+                // Batch makeUniqueFile operations for immediate upload
+                if (useMakeUnique) {
+                    const uniqueFilePromises = [];
+                    for (let i = 1; i <= copies; i++) {
+                        uniqueFilePromises.push(makeUniqueFile(fileAfterCanvasProcessing, origBase, i));
+                    }
 
-                    if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
+                    // Process unique files in batches
+                    for (let i = 0; i < uniqueFilePromises.length; i += MAKE_UNIQUE_BATCH_SIZE) {
+                        const batch = uniqueFilePromises.slice(i, i + MAKE_UNIQUE_BATCH_SIZE);
+                        const uniqueFilesBatch = await Promise.all(batch);
+                        uniqueFilesBatch.forEach(fileToUpload => {
+                            if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
+                            if (both) {
+                                uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                                uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_DECAL, 0, useForcedName));
+                            } else {
+                                uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
+                            }
+                        });
+                    }
+                } else {
+                    // If not making unique, just add the processed file to upload promises
+                    if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileAfterCanvasProcessing);
                     if (both) {
-                        uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_TSHIRT, 0, useForcedName));
-                        uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_DECAL, 0, useForcedName));
+                        uploadPromises.push(uploadFile(fileAfterCanvasProcessing, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                        uploadPromises.push(uploadFile(fileAfterCanvasProcessing, ASSET_TYPE_DECAL, 0, useForcedName));
                     } else {
-                        uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
+                        uploadPromises.push(uploadFile(fileAfterCanvasProcessing, assetType, 0, useForcedName));
                     }
                 }
             }
