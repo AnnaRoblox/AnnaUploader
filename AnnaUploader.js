@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.5
+// @version     6.6
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -35,7 +35,7 @@
     let IS_GROUP      = GM_getValue('isGroup', false);
     let useForcedName = false;
     let useMakeUnique = false;
-    let uniqueCopies  = 2; // Changed default to 2 copies
+    let uniqueCopies  = 1;
     let useDownload   = false;
     let useForceCanvasUpload = false; // New: Toggle for force canvas processing
 
@@ -203,6 +203,15 @@
                 console.error('[Upload] Failed to parse response JSON:', e, txt);
             }
 
+            // NEW ERROR CHECK: If response indicates account is banned
+            if (json?.message && typeof json.message === 'string' && json.message.toLowerCase().includes('banned')) {
+                displayMessage('Upload failed: Your account appears to be banned. Cannot complete upload.', 'error');
+                console.error(`[Upload] Account banned for "${file.name}":`, txt);
+                completed++;
+                updateStatus();
+                return; // Stop processing this file
+            }
+
             // Handle successful upload
             if (resp.ok && json?.assetId) {
                 logAsset(json.assetId, null, displayName);
@@ -308,48 +317,38 @@
     /**
      * "Slip Mode": subtly randomizes ALL non-transparent pixels by ±1 per channel.
      * This creates unique images to bypass potential Roblox duplicate detection.
-     * Modified to generate 'count' unique copies of the image.
      * @param {File} file The original image file.
      * @param {string} origBase The base name of the original file.
-     * @param {number} count The number of unique copies to generate.
-     * @returns {Promise<File[]>} A promise that resolves with an array of 'count' new unique image File objects.
+     * @param {number} copyIndex The index of the copy (for naming).
+     * @returns {Promise<File>} A promise that resolves with the new unique image File object.
      */
-    function makeUniqueFile(file, origBase, count) {
+    function makeUniqueFile(file, origBase, copyIndex) {
         return new Promise(resolve => {
             const img = new Image();
             img.onload = () => {
-                const uniqueFiles = [];
-                for (let k = 0; k < count; k++) {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
 
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    const data = imageData.data; // Pixel data: [R, G, B, A, R, G, B, A, ...]
-                    for (let i = 0; i < data.length; i += 4) {
-                        if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
-                            const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1); // Randomly add or subtract 1 - 3
-                            data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
-                            data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
-                            data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
-                        }
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data; // Pixel data: [R, G, B, A, R, G, B, A, ...]
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
+                        const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1); // Randomly add or subtract 1 - 3
+                        data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
+                        data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
+                        data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
                     }
-                    ctx.putImageData(imageData, 0, 0); // Put modified data back to canvas
-
-                    // Generate blob for each unique copy
-                    canvas.toBlob(blob => {
-                        const ext = 'png'; // Always output PNG after processing, especially if converted from WebP
-                        const newName = `${origBase}_${k + 1}.${ext}`; // Create new name with index
-                        uniqueFiles.push(new File([blob], newName, { type: 'image/png' }));
-
-                        // Resolve the promise only after all copies are generated
-                        if (uniqueFiles.length === count) {
-                            resolve(uniqueFiles);
-                        }
-                    }, 'image/png'); // Always convert to PNG
                 }
+                ctx.putImageData(imageData, 0, 0); // Put modified data back to canvas
+
+                canvas.toBlob(blob => {
+                    const ext = 'png'; // Always output PNG after processing, especially if converted from WebP
+                    const newName = `${origBase}_${copyIndex}.${ext}`; // Create new name with index
+                    resolve(new File([blob], newName, { type: 'image/png' })); // Resolve with new File object as PNG
+                }, 'image/png'); // Always convert to PNG
             };
             img.src = URL.createObjectURL(file); // Load image from file blob URL
         });
@@ -366,8 +365,7 @@
         if (!files?.length) return;
 
         const downloadsMap = {};
-        // uniqueCopies is now directly used for the number of copies to generate
-        const copiesToGenerate = useMakeUnique ? uniqueCopies : 1;
+        const copies = useMakeUnique ? uniqueCopies : 1;
 
         if (massMode) {
             // In mass mode, add files to the queue after processing
@@ -405,35 +403,29 @@
                 }
 
                 const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
+                for (let i = 1; i <= copies; i++) {
+                    processingTasks.push(
+                        (async () => {
+                            const fileForQueue = useMakeUnique
+                                ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
+                                : fileAfterCanvasProcessing; // Use the file after potential canvas processing
 
-                processingTasks.push(
-                    (async () => {
-                        let filesForQueue = [];
-                        if (useMakeUnique) {
-                            // makeUniqueFile now returns an array of files
-                            filesForQueue = await makeUniqueFile(fileAfterCanvasProcessing, origBase, copiesToGenerate);
-                        } else {
-                            filesForQueue = [fileAfterCanvasProcessing]; // Wrap in array for consistency
-                        }
-
-                        for (const fileItem of filesForQueue) {
                             if (both) {
-                                massQueue.push({ f: fileItem, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
-                                massQueue.push({ f: fileItem, type: ASSET_TYPE_DECAL, forceName: useForcedName });
+                                massQueue.push({ f: fileForQueue, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
+                                massQueue.push({ f: fileForQueue, type: ASSET_TYPE_DECAL, forceName: useForcedName });
                             } else {
-                                massQueue.push({ f: fileItem, type: assetType, forceName: useForcedName });
+                                massQueue.push({ f: fileForQueue, type: assetType, forceName: useForcedName });
                             }
-                        }
-                    })()
-                );
+                        })()
+                    );
+                }
             }
             await Promise.all(processingTasks); // Wait for all files to be processed and queued
-            displayMessage(`${massQueue.length} files added to queue!`, 'success'); // Display total queued files
+            displayMessage(`${processingTasks.length} files added to queue!`, 'success');
             updateStatus(); // Update status to show queued items
         } else {
             // Not in mass mode, proceed with immediate upload
-            // Calculate total files based on original files * (2 if both, 1 otherwise) * copiesToGenerate
-            const totalFilesToUpload = files.length * (both ? 2 : 1) * copiesToGenerate;
+            const totalFilesToUpload = files.length * (both ? 2 : 1) * copies;
             batchTotal = totalFilesToUpload; // Set total for immediate batch
             completed = 0;
             updateStatus();
@@ -474,21 +466,17 @@
                 const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
                 downloadsMap[origBase] = []; // Initialize for potential downloads
 
-                let filesToUpload = [];
-                if (useMakeUnique) {
-                    // makeUniqueFile now returns an array of files
-                    filesToUpload = await makeUniqueFile(fileAfterCanvasProcessing, origBase, copiesToGenerate);
-                } else {
-                    filesToUpload = [fileAfterCanvasProcessing]; // Wrap in array for consistency
-                }
+                for (let i = 1; i <= copies; i++) {
+                    const fileToUpload = useMakeUnique
+                        ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
+                        : fileAfterCanvasProcessing; // Get the processed file
 
-                for (const fileItem of filesToUpload) {
-                    if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileItem);
+                    if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
                     if (both) {
-                        uploadPromises.push(uploadFile(fileItem, ASSET_TYPE_TSHIRT, 0, useForcedName));
-                        uploadPromises.push(uploadFile(fileItem, ASSET_TYPE_DECAL, 0, useForcedName));
+                        uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                        uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_DECAL, 0, useForcedName));
                     } else {
-                        uploadPromises.push(uploadFile(fileItem, assetType, 0, useForcedName));
+                        uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
                     }
                 }
             }
