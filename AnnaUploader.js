@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.2
+// @version     6.3
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -47,6 +47,7 @@
 
     let csrfToken = null; // Roblox CSRF token for authenticated requests
     let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn, forceUploadBtn; // UI elements
+    let uiContainer; // Reference to the main UI container element
 
     /**
      * Utility function to extract the base name of a filename (without extension).
@@ -326,7 +327,7 @@
                 const data = imageData.data; // Pixel data: [R, G, B, A, R, G, B, A, ...]
                 for (let i = 0; i < data.length; i += 4) {
                     if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
-                        const delta = Math.random() < 0.5 ? -1 : 1; // Randomly add or subtract 1
+                        const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1); // Randomly add or subtract 1 - 3
                         data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
                         data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
                         data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
@@ -704,10 +705,11 @@
      * Creates and injects the AnnaUploader UI panel into the page.
      */
     function createUI() {
-        const c = document.createElement('div');
-        Object.assign(c.style, {
+        // Assign to uiContainer for global access
+        uiContainer = document.createElement('div');
+        Object.assign(uiContainer.style, {
             position: 'fixed',
-            top: '10px',
+            top: '10px', // Initial top position
             right: '10px',
             width: '260px',
             background: '#1a1a1a', // Darker background
@@ -720,7 +722,8 @@
             display: 'flex',
             flexDirection: 'column',
             gap: '10px', // More spacing
-            fontFamily: 'Inter, Arial, sans-serif' // Modern font
+            fontFamily: 'Inter, Arial, sans-serif', // Modern font
+            transition: 'top 0.3s ease-in-out' // Smooth transition for top position
         });
 
         // Helper to create styled buttons
@@ -744,7 +747,7 @@
         }
 
         // Close button for the UI panel
-        const close = btn('×', () => c.remove());
+        const close = btn('×', () => uiContainer.remove());
         Object.assign(close.style, {
             position: 'absolute',
             top: '5px',
@@ -760,31 +763,31 @@
         close.onmouseover = () => close.style.color = '#fff';
         close.onmouseout = () => close.style.color = '#e0e0e0';
         close.title = 'Close AnnaUploader';
-        c.appendChild(close);
+        uiContainer.appendChild(close);
 
         const title = document.createElement('h3');
         title.textContent = 'AnnaUploader';
         title.style.margin = '0 0 10px 0'; // More margin below title
         title.style.color = '#4af'; // Accent color for title
         title.style.textAlign = 'center';
-        c.appendChild(title);
+        uiContainer.appendChild(title);
 
         // Upload T-Shirts button
-        c.appendChild(btn('Upload T-Shirts', () => {
+        uiContainer.appendChild(btn('Upload T-Shirts', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             i.click();
         }));
         // Upload Decals button
-        c.appendChild(btn('Upload Decals', () => {
+        uiContainer.appendChild(btn('Upload Decals', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             i.click();
         }));
         // Upload Both button
-        c.appendChild(btn('Upload Both', () => {
+        uiContainer.appendChild(btn('Upload Both', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, null, true); // null means 'both'
@@ -801,7 +804,7 @@
             updateStatus(); // Update status display
             displayMessage(`Mass Upload Mode: ${massMode ? 'Enabled' : 'Disabled'}`, 'info');
         });
-        c.appendChild(toggleBtn);
+        uiContainer.appendChild(toggleBtn);
 
         // Start Mass Upload button (initially hidden)
         startBtn = btn('Start Mass Upload', startMassUpload);
@@ -812,14 +815,14 @@
         });
         startBtn.onmouseover = () => startBtn.style.background = '#218838';
         startBtn.onmouseout = () => startBtn.style.background = '#28a745';
-        c.appendChild(startBtn);
+        uiContainer.appendChild(startBtn);
 
         // Use default Name toggle
         const nameBtn = btn(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
             useForcedName = !useForcedName;
             nameBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
         });
-        c.appendChild(nameBtn);
+        uiContainer.appendChild(nameBtn);
 
         // Slip Mode toggle
         const slipBtn = btn(`Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`, () => {
@@ -827,12 +830,20 @@
             slipBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
             copiesInput.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide copies input
             downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide download button
+
+            // Adjust UI position based on Slip Mode
+            if (useMakeUnique) {
+                uiContainer.style.top = '0px'; // Move UI up to 0px from the top
+            } else {
+                uiContainer.style.top = '5px'; // Revert to original position
+            }
+
             if (!useMakeUnique) { // If turning Slip Mode off, also turn off download
                 useDownload = false;
                 downloadBtn.textContent = 'Download Images: Off';
             }
         });
-        c.appendChild(slipBtn);
+        uiContainer.appendChild(slipBtn);
 
         // Copies input for Slip Mode
         copiesInput = document.createElement('input');
@@ -853,7 +864,7 @@
             if (v > 0) uniqueCopies = v;
             else e.target.value = uniqueCopies; // Revert to valid value if invalid input
         };
-        c.appendChild(copiesInput);
+        uiContainer.appendChild(copiesInput);
 
         // Download Images toggle for Slip Mode
         downloadBtn = btn(`Download Images: ${useDownload ? 'On' : 'Off'}`, () => {
@@ -861,7 +872,7 @@
             downloadBtn.textContent = `Download Images: ${useDownload ? 'On' : 'Off'}`;
         });
         downloadBtn.style.display = 'none'; // Initially hidden
-        c.appendChild(downloadBtn);
+        uiContainer.appendChild(downloadBtn);
 
         // New: Force Upload (through Canvas) toggle
         forceUploadBtn = btn(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
@@ -869,10 +880,10 @@
             forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
             displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
         });
-        c.appendChild(forceUploadBtn);
+        uiContainer.appendChild(forceUploadBtn);
 
         // Change ID button
-        c.appendChild(btn('Change ID', async () => {
+        uiContainer.appendChild(btn('Change ID', async () => {
             const inp = await customPrompt("Enter your Roblox User ID/URL or Group URL:", USER_ID || '');
             if (inp === null) return; // User cancelled
             let id, isGrp = false;
@@ -900,7 +911,7 @@
         // "Use This Profile as ID" button (contextual)
         const pm = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
         if (pm) {
-            c.appendChild(btn('Use This Profile as ID', () => {
+            uiContainer.appendChild(btn('Use This Profile as ID', () => {
                 USER_ID = Number(pm[1]);
                 IS_GROUP = false;
                 GM_setValue('userId', USER_ID);
@@ -912,7 +923,7 @@
         // "Use This Group as ID" button (contextual)
         const gm = window.location.pathname.match(/^\/communities\/(\d+)/);
         if (gm) {
-            c.appendChild(btn('Use This Group as ID', () => {
+            uiContainer.appendChild(btn('Use This Group as ID', () => {
                 USER_ID = Number(gm[1]);
                 IS_GROUP = true;
                 GM_setValue('userId', USER_ID);
@@ -922,7 +933,7 @@
         }
 
         // Show Logged Assets button
-        c.appendChild(btn('Show Logged Assets', () => {
+        uiContainer.appendChild(btn('Show Logged Assets', () => {
             const log = loadLog();
             const entries = Object.entries(log);
             const w = window.open('', '_blank'); // Open a new blank window
@@ -961,17 +972,17 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
         hint.style.fontSize = '12px'; hint.style.color = '#aaa';
         hint.style.textAlign = 'center';
         hint.style.marginTop = '5px';
-        c.appendChild(hint);
+        uiContainer.appendChild(hint);
 
         // Status element at the bottom
         statusEl = document.createElement('div');
         statusEl.style.fontSize = '13px'; statusEl.style.color = '#fff';
         statusEl.style.textAlign = 'center';
-        statusEl.style.paddingTop = '10px';
+        statusEl.style.paddingTop = '5px';
         statusEl.style.borderTop = '1px solid #333';
-        c.appendChild(statusEl);
+        uiContainer.appendChild(statusEl);
 
-        document.body.appendChild(c);
+        document.body.appendChild(uiContainer);
     }
 
     /**
