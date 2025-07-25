@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.6
+// @version     6.7
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -33,11 +33,13 @@
     // Script configuration variables, managed with Tampermonkey's GM_getValue/GM_setValue
     let USER_ID       = GM_getValue('userId', null);
     let IS_GROUP      = GM_getValue('isGroup', false);
-    let useForcedName = false;
-    let useMakeUnique = false;
-    let uniqueCopies  = 1;
-    let useDownload   = false;
-    let useForceCanvasUpload = false; // New: Toggle for force canvas processing
+    let useForcedName = GM_getValue('useForcedName', false); // Persist this setting
+    let useMakeUnique = GM_getValue('useMakeUnique', false); // Persist this setting
+    let uniqueCopies  = GM_getValue('uniqueCopies', 1);     // Persist this setting
+    let useDownload   = GM_getValue('useDownload', false);  // Persist this setting
+    let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false); // Persist this setting
+    // NEW SETTING: Slip Mode Pixel Method - 'all_pixels' or '1-3_random'
+    let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
 
     // Mass upload mode variables
     let massMode    = false; // True if mass upload mode is active
@@ -48,6 +50,7 @@
     let csrfToken = null; // Roblox CSRF token for authenticated requests
     let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn, forceUploadBtn; // UI elements
     let uiContainer; // Reference to the main UI container element
+    let settingsModal; // Reference to the settings modal element
 
     /**
      * Utility function to extract the base name of a filename (without extension).
@@ -315,8 +318,8 @@
     }
 
     /**
-     * "Slip Mode": subtly randomizes ALL non-transparent pixels by ±1 per channel.
-     * This creates unique images to bypass potential Roblox duplicate detection.
+     * "Slip Mode": subtly randomizes pixels to create unique images.
+     * The method of randomization (all pixels or 1-3 random pixels) depends on `slipModePixelMethod`.
      * @param {File} file The original image file.
      * @param {string} origBase The base name of the original file.
      * @param {number} copyIndex The index of the copy (for naming).
@@ -334,12 +337,23 @@
 
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imageData.data; // Pixel data: [R, G, B, A, R, G, B, A, ...]
+
                 for (let i = 0; i < data.length; i += 4) {
                     if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
-                        const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1); // Randomly add or subtract 1 - 3
-                        data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
-                        data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
-                        data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                        let delta;
+                        if (slipModePixelMethod === 'all_pixels') {
+                            // Adjust all color channels by a random delta of ±1
+                            delta = (Math.random() < 0.5 ? -1 : 1);
+                            data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
+                            data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
+                            data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                        } else { // '1-3_random'
+                            // Adjust all color channels by a random delta of ±1 to ±3
+                            delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1);
+                            data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
+                            data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
+                            data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                        }
                     }
                 }
                 ctx.putImageData(imageData, 0, 0); // Put modified data back to canvas
@@ -709,6 +723,30 @@
         });
     }
 
+    /**
+     * Helper to create styled buttons for both UI panels.
+     * @param {string} text The text content of the button.
+     * @param {function} fn The click handler function.
+     * @returns {HTMLButtonElement} The created button element.
+     */
+    function createStyledButton(text, fn) {
+        const b = document.createElement('button');
+        b.textContent = text;
+        Object.assign(b.style, {
+            padding: '10px',
+            cursor: 'pointer',
+            color: '#fff',
+            background: '#3a3a3a', // Darker button background
+            border: '1px solid #555',
+            borderRadius: '5px', // Slightly more rounded
+            transition: 'background 0.2s ease-in-out',
+            fontSize: '14px'
+        });
+        b.onmouseover = () => b.style.background = '#505050'; // Hover effect
+        b.onmouseout = () => b.style.background = '#3a3a3a';
+        b.onclick = fn;
+        return b;
+    }
 
     /**
      * Creates and injects the AnnaUploader UI panel into the page.
@@ -735,28 +773,8 @@
             transition: 'top 0.3s ease-in-out' // Smooth transition for top position
         });
 
-        // Helper to create styled buttons
-        function btn(text, fn) {
-            const b = document.createElement('button');
-            b.textContent = text;
-            Object.assign(b.style, {
-                padding: '10px',
-                cursor: 'pointer',
-                color: '#fff',
-                background: '#3a3a3a', // Darker button background
-                border: '1px solid #555',
-                borderRadius: '5px', // Slightly more rounded
-                transition: 'background 0.2s ease-in-out',
-                fontSize: '14px'
-            });
-            b.onmouseover = () => b.style.background = '#505050'; // Hover effect
-            b.onmouseout = () => b.style.background = '#3a3a3a';
-            b.onclick = fn;
-            return b;
-        }
-
         // Close button for the UI panel
-        const close = btn('×', () => uiContainer.remove());
+        const close = createStyledButton('×', () => uiContainer.remove());
         Object.assign(close.style, {
             position: 'absolute',
             top: '5px',
@@ -782,21 +800,21 @@
         uiContainer.appendChild(title);
 
         // Upload T-Shirts button
-        uiContainer.appendChild(btn('Upload T-Shirts', () => {
+        uiContainer.appendChild(createStyledButton('Upload T-Shirts', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             i.click();
         }));
         // Upload Decals button
-        uiContainer.appendChild(btn('Upload Decals', () => {
+        uiContainer.appendChild(createStyledButton('Upload Decals', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             i.click();
         }));
         // Upload Both button
-        uiContainer.appendChild(btn('Upload Both', () => {
+        uiContainer.appendChild(createStyledButton('Upload Both', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, null, true); // null means 'both'
@@ -804,7 +822,7 @@
         }));
 
         // Mass Upload toggle button
-        toggleBtn = btn('Enable Mass Upload', () => {
+        toggleBtn = createStyledButton('Enable Mass Upload', () => {
             massMode = !massMode;
             toggleBtn.textContent = massMode ? 'Disable Mass Upload' : 'Enable Mass Upload';
             startBtn.style.display = massMode ? 'block' : 'none'; // Show/hide start button
@@ -816,7 +834,7 @@
         uiContainer.appendChild(toggleBtn);
 
         // Start Mass Upload button (initially hidden)
-        startBtn = btn('Start Mass Upload', startMassUpload);
+        startBtn = createStyledButton('Start Mass Upload', startMassUpload);
         startBtn.style.display = 'none';
         Object.assign(startBtn.style, {
             background: '#28a745', // Green for start
@@ -827,20 +845,24 @@
         uiContainer.appendChild(startBtn);
 
         // Use default Name toggle
-        const nameBtn = btn(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
+        const nameBtn = createStyledButton(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
             useForcedName = !useForcedName;
+            GM_setValue('useForcedName', useForcedName); // Save setting
             nameBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
         });
         uiContainer.appendChild(nameBtn);
 
         // Slip Mode toggle
-        const slipBtn = btn(`Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`, () => {
+        const slipBtn = createStyledButton(`Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`, () => {
             useMakeUnique = !useMakeUnique;
+            GM_setValue('useMakeUnique', useMakeUnique); // Save setting
             slipBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
             copiesInput.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide copies input
             downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide download button
 
-            // Adjust UI position based on Slip Mode
+            // Adjust UI position based on Slip Mode (moved to settings for other options)
+            // This specific UI adjustment might be less relevant now that pixel method is in settings.
+            // Keeping it for now, but could be removed if it causes visual issues.
             if (useMakeUnique) {
                 uiContainer.style.top = '0px'; // Move UI up to 0px from the top
             } else {
@@ -849,6 +871,7 @@
 
             if (!useMakeUnique) { // If turning Slip Mode off, also turn off download
                 useDownload = false;
+                GM_setValue('useDownload', useDownload); // Save setting
                 downloadBtn.textContent = 'Download Images: Off';
             }
         });
@@ -860,7 +883,7 @@
         Object.assign(copiesInput.style, {
             width: '100%',
             boxSizing: 'border-box',
-            display: 'none', // Initially hidden
+            display: useMakeUnique ? 'block' : 'none', // Initially hidden based on setting
             padding: '8px',
             borderRadius: '4px',
             border: '1px solid #555',
@@ -870,29 +893,34 @@
         });
         copiesInput.onchange = e => {
             const v = parseInt(e.target.value, 10);
-            if (v > 0) uniqueCopies = v;
+            if (v > 0) {
+                uniqueCopies = v;
+                GM_setValue('uniqueCopies', uniqueCopies); // Save setting
+            }
             else e.target.value = uniqueCopies; // Revert to valid value if invalid input
         };
         uiContainer.appendChild(copiesInput);
 
         // Download Images toggle for Slip Mode
-        downloadBtn = btn(`Download Images: ${useDownload ? 'On' : 'Off'}`, () => {
+        downloadBtn = createStyledButton(`Download Images: ${useDownload ? 'On' : 'Off'}`, () => {
             useDownload = !useDownload;
+            GM_setValue('useDownload', useDownload); // Save setting
             downloadBtn.textContent = `Download Images: ${useDownload ? 'On' : 'Off'}`;
         });
-        downloadBtn.style.display = 'none'; // Initially hidden
+        downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Initially hidden based on setting
         uiContainer.appendChild(downloadBtn);
 
-        // New: Force Upload (through Canvas) toggle
-        forceUploadBtn = btn(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
+        // Force Upload (through Canvas) toggle
+        forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
             useForceCanvasUpload = !useForceCanvasUpload;
+            GM_setValue('useForceCanvasUpload', useForceCanvasUpload); // Save setting
             forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
             displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
         });
         uiContainer.appendChild(forceUploadBtn);
 
         // Change ID button
-        uiContainer.appendChild(btn('Change ID', async () => {
+        uiContainer.appendChild(createStyledButton('Change ID', async () => {
             const inp = await customPrompt("Enter your Roblox User ID/URL or Group URL:", USER_ID || '');
             if (inp === null) return; // User cancelled
             let id, isGrp = false;
@@ -920,7 +948,7 @@
         // "Use This Profile as ID" button (contextual)
         const pm = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
         if (pm) {
-            uiContainer.appendChild(btn('Use This Profile as ID', () => {
+            uiContainer.appendChild(createStyledButton('Use This Profile as ID', () => {
                 USER_ID = Number(pm[1]);
                 IS_GROUP = false;
                 GM_setValue('userId', USER_ID);
@@ -932,7 +960,7 @@
         // "Use This Group as ID" button (contextual)
         const gm = window.location.pathname.match(/^\/communities\/(\d+)/);
         if (gm) {
-            uiContainer.appendChild(btn('Use This Group as ID', () => {
+            uiContainer.appendChild(createStyledButton('Use This Group as ID', () => {
                 USER_ID = Number(gm[1]);
                 IS_GROUP = true;
                 GM_setValue('userId', USER_ID);
@@ -941,8 +969,133 @@
             }));
         }
 
-        // Show Logged Assets button
-        uiContainer.appendChild(btn('Show Logged Assets', () => {
+        // NEW: Settings button to open the settings modal
+        uiContainer.appendChild(createStyledButton('Settings', () => {
+            createSettingsUI();
+        }));
+
+        const hint = document.createElement('div');
+        hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
+        hint.style.fontSize = '12px'; hint.style.color = '#aaa';
+        hint.style.textAlign = 'center';
+        hint.style.marginTop = '5px';
+        uiContainer.appendChild(hint);
+
+        // Status element at the bottom
+        statusEl = document.createElement('div');
+        statusEl.style.fontSize = '13px'; statusEl.style.color = '#fff';
+        statusEl.style.textAlign = 'center';
+        statusEl.style.paddingTop = '5px';
+        statusEl.style.borderTop = '1px solid #333';
+        uiContainer.appendChild(statusEl);
+
+        document.body.appendChild(uiContainer);
+    }
+
+    /**
+     * Creates and injects the AnnaUploader Settings UI modal into the page.
+     */
+    function createSettingsUI() {
+        if (settingsModal) { // If settings modal already exists, just show it
+            settingsModal.style.display = 'flex';
+            return;
+        }
+
+        settingsModal = document.createElement('div');
+        Object.assign(settingsModal.style, {
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: '300px',
+            background: '#1a1a1a', // Darker background
+            border: '2px solid #333', // Subtle border
+            color: '#e0e0e0', // Lighter text color
+            padding: '20px',
+            zIndex: 10005, // Higher than main UI
+            borderRadius: '10px',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.6)', // Stronger shadow
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '15px', // More spacing
+            fontFamily: 'Inter, Arial, sans-serif', // Modern font
+        });
+
+        // Close button for the settings modal
+        const closeSettings = createStyledButton('×', () => {
+            settingsModal.style.display = 'none'; // Just hide, don't remove for re-opening
+        });
+        Object.assign(closeSettings.style, {
+            position: 'absolute',
+            top: '8px',
+            right: '10px',
+            background: 'transparent',
+            border: 'none',
+            fontSize: '20px',
+            color: '#e0e0e0',
+            fontWeight: 'bold',
+            transition: 'color 0.2s',
+            padding: '5px 10px'
+        });
+        closeSettings.onmouseover = () => closeSettings.style.color = '#fff';
+        closeSettings.onmouseout = () => closeSettings.style.color = '#e0e0e0';
+        closeSettings.title = 'Close Settings';
+        settingsModal.appendChild(closeSettings);
+
+        const title = document.createElement('h3');
+        title.textContent = 'AnnaUploader Settings';
+        title.style.margin = '0 0 15px 0';
+        title.style.color = '#4af';
+        title.style.textAlign = 'center';
+        settingsModal.appendChild(title);
+
+        // NEW SETTING: Slip Mode Pixel Method
+        const slipModePixelMethodLabel = document.createElement('label');
+        slipModePixelMethodLabel.textContent = 'Slip Mode Pixel Method:';
+        Object.assign(slipModePixelMethodLabel.style, {
+            display: 'block',
+            marginBottom: '5px',
+            fontSize: '14px',
+            color: '#bbb'
+        });
+        settingsModal.appendChild(slipModePixelMethodLabel);
+
+        const slipModePixelMethodSelect = document.createElement('select');
+        Object.assign(slipModePixelMethodSelect.style, {
+            width: '100%',
+            padding: '10px',
+            borderRadius: '5px',
+            border: '1px solid #555',
+            background: '#333',
+            color: '#fff',
+            fontSize: '14px',
+            outline: 'none',
+            marginBottom: '10px'
+        });
+
+        const optionAll = document.createElement('option');
+        optionAll.value = 'all_pixels';
+        optionAll.textContent = 'All Pixels (±1)';
+        slipModePixelMethodSelect.appendChild(optionAll);
+
+        const optionRandom = document.createElement('option');
+        optionRandom.value = '1-3_random';
+        optionRandom.textContent = '1-3 Random Pixels (±1-3)';
+        slipModePixelMethodSelect.appendChild(optionRandom);
+
+        // Set current value
+        slipModePixelMethodSelect.value = slipModePixelMethod;
+
+        slipModePixelMethodSelect.onchange = (e) => {
+            slipModePixelMethod = e.target.value;
+            GM_setValue('slipModePixelMethod', slipModePixelMethod); // Save setting
+            displayMessage(`Slip Mode Pixel Method set to: ${e.target.options[e.target.selectedIndex].text}`, 'success');
+        };
+        settingsModal.appendChild(slipModePixelMethodSelect);
+
+
+        // Show Logged Assets button (moved from main UI)
+        settingsModal.appendChild(createStyledButton('Show Logged Assets', () => {
             const log = loadLog();
             const entries = Object.entries(log);
             const w = window.open('', '_blank'); // Open a new blank window
@@ -976,22 +1129,7 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
             w.document.close(); // Close the document stream to ensure content is rendered
         }));
 
-        const hint = document.createElement('div');
-        hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
-        hint.style.fontSize = '12px'; hint.style.color = '#aaa';
-        hint.style.textAlign = 'center';
-        hint.style.marginTop = '5px';
-        uiContainer.appendChild(hint);
-
-        // Status element at the bottom
-        statusEl = document.createElement('div');
-        statusEl.style.fontSize = '13px'; statusEl.style.color = '#fff';
-        statusEl.style.textAlign = 'center';
-        statusEl.style.paddingTop = '5px';
-        statusEl.style.borderTop = '1px solid #333';
-        uiContainer.appendChild(statusEl);
-
-        document.body.appendChild(uiContainer);
+        document.body.appendChild(settingsModal);
     }
 
     /**
