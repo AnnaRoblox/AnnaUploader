@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.7
+// @version     6.8
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -38,7 +38,7 @@
     let uniqueCopies  = GM_getValue('uniqueCopies', 1);     // Persist this setting
     let useDownload   = GM_getValue('useDownload', false);  // Persist this setting
     let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false); // Persist this setting
-    // NEW SETTING: Slip Mode Pixel Method - 'all_pixels' or '1-3_random'
+    // NEW SETTING: Slip Mode Pixel Method - 'all_pixels', '1-3_random', or '1-4_random_single_pixel'
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
 
     // Mass upload mode variables
@@ -319,7 +319,7 @@
 
     /**
      * "Slip Mode": subtly randomizes pixels to create unique images.
-     * The method of randomization (all pixels or 1-3 random pixels) depends on `slipModePixelMethod`.
+     * The method of randomization (all pixels, 1-3 random pixels, or 1 random pixel ±1-4) depends on `slipModePixelMethod`.
      * @param {File} file The original image file.
      * @param {string} origBase The base name of the original file.
      * @param {number} copyIndex The index of the copy (for naming).
@@ -338,21 +338,32 @@
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imageData.data; // Pixel data: [R, G, B, A, R, G, B, A, ...]
 
-                for (let i = 0; i < data.length; i += 4) {
-                    if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
-                        let delta;
-                        if (slipModePixelMethod === 'all_pixels') {
-                            // Adjust all color channels by a random delta of ±1
-                            delta = (Math.random() < 0.5 ? -1 : 1);
-                            data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
-                            data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
-                            data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
-                        } else { // '1-3_random'
-                            // Adjust all color channels by a random delta of ±1 to ±3
-                            delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1);
-                            data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
-                            data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
-                            data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                if (slipModePixelMethod === '1-4_random_single_pixel') {
+                    // Select one random pixel and adjust its color channels by a random delta of ±1 to ±4
+                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4; // Ensure it's the start of a pixel
+                    if (data[pixelIndex + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
+                        const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 4) + 1); // Random delta between 1 and 4
+                        data[pixelIndex]     = Math.min(255, Math.max(0, data[pixelIndex]     + delta)); // Red
+                        data[pixelIndex+1]   = Math.min(255, Math.max(0, data[pixelIndex+1] + delta)); // Green
+                        data[pixelIndex+2]   = Math.min(255, Math.max(0, data[pixelIndex+2] + delta)); // Blue
+                    }
+                } else {
+                    for (let i = 0; i < data.length; i += 4) {
+                        if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
+                            let delta;
+                            if (slipModePixelMethod === 'all_pixels') {
+                                // Adjust all color channels by a random delta of ±1
+                                delta = (Math.random() < 0.5 ? -1 : 1);
+                                data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
+                                data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
+                                data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                            } else if (slipModePixelMethod === '1-3_random') {
+                                // Adjust all color channels by a random delta of ±1 to ±3
+                                delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1);
+                                data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
+                                data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
+                                data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                            }
                         }
                     }
                 }
@@ -844,14 +855,6 @@
         startBtn.onmouseout = () => startBtn.style.background = '#28a745';
         uiContainer.appendChild(startBtn);
 
-        // Use default Name toggle
-        const nameBtn = createStyledButton(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
-            useForcedName = !useForcedName;
-            GM_setValue('useForcedName', useForcedName); // Save setting
-            nameBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
-        });
-        uiContainer.appendChild(nameBtn);
-
         // Slip Mode toggle
         const slipBtn = createStyledButton(`Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`, () => {
             useMakeUnique = !useMakeUnique;
@@ -859,15 +862,6 @@
             slipBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
             copiesInput.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide copies input
             downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide download button
-
-            // Adjust UI position based on Slip Mode (moved to settings for other options)
-            // This specific UI adjustment might be less relevant now that pixel method is in settings.
-            // Keeping it for now, but could be removed if it causes visual issues.
-            if (useMakeUnique) {
-                uiContainer.style.top = '0px'; // Move UI up to 0px from the top
-            } else {
-                uiContainer.style.top = '5px'; // Revert to original position
-            }
 
             if (!useMakeUnique) { // If turning Slip Mode off, also turn off download
                 useDownload = false;
@@ -1049,6 +1043,14 @@
         title.style.textAlign = 'center';
         settingsModal.appendChild(title);
 
+        // Moved: Use default Name toggle into settings
+        const nameBtn = createStyledButton(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
+            useForcedName = !useForcedName;
+            GM_setValue('useForcedName', useForcedName); // Save setting
+            nameBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
+        });
+        settingsModal.appendChild(nameBtn);
+
         // NEW SETTING: Slip Mode Pixel Method
         const slipModePixelMethodLabel = document.createElement('label');
         slipModePixelMethodLabel.textContent = 'Slip Mode Pixel Method:';
@@ -1080,8 +1082,13 @@
 
         const optionRandom = document.createElement('option');
         optionRandom.value = '1-3_random';
-        optionRandom.textContent = '1-3 Random Pixels (±1-3)';
+        optionRandom.textContent = 'Random Pixels (±1-3)';
         slipModePixelMethodSelect.appendChild(optionRandom);
+
+        const optionSingleRandom = document.createElement('option');
+        optionSingleRandom.value = '1-4_random_single_pixel';
+        optionSingleRandom.textContent = 'Single Random Pixel (±1-4)';
+        slipModePixelMethodSelect.appendChild(optionSingleRandom);
 
         // Set current value
         slipModePixelMethodSelect.value = slipModePixelMethod;
