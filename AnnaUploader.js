@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.8
+// @version     6.9
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -48,7 +48,7 @@
     let completed   = 0;     // Number of items completed in current batch/queue
 
     let csrfToken = null; // Roblox CSRF token for authenticated requests
-    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn, forceUploadBtn; // UI elements
+    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn; // UI elements (removed forceUploadBtn from here)
     let uiContainer; // Reference to the main UI container element
     let settingsModal; // Reference to the settings modal element
 
@@ -904,14 +904,14 @@
         downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Initially hidden based on setting
         uiContainer.appendChild(downloadBtn);
 
-        // Force Upload (through Canvas) toggle
-        forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
-            useForceCanvasUpload = !useForceCanvasUpload;
-            GM_setValue('useForceCanvasUpload', useForceCanvasUpload); // Save setting
-            forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
-            displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
-        });
-        uiContainer.appendChild(forceUploadBtn);
+        // Force Upload (through Canvas) toggle - REMOVED from here, moved to settings modal
+        // forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
+        //     useForceCanvasUpload = !useForceCanvasUpload;
+        //     GM_setValue('useForceCanvasUpload', useForceCanvasUpload); // Save setting
+        //     forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
+        //     displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
+        // });
+        // uiContainer.appendChild(forceUploadBtn);
 
         // Change ID button
         uiContainer.appendChild(createStyledButton('Change ID', async () => {
@@ -1099,6 +1099,15 @@
             displayMessage(`Slip Mode Pixel Method set to: ${e.target.options[e.target.selectedIndex].text}`, 'success');
         };
         settingsModal.appendChild(slipModePixelMethodSelect);
+
+        // Force Upload (through Canvas) toggle - MOVED here from main UI
+        const forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
+            useForceCanvasUpload = !useForceCanvasUpload;
+            GM_setValue('useForceCanvasUpload', useForceCanvasUpload); // Save setting
+            forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
+            displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
+        });
+        settingsModal.appendChild(forceUploadBtn);
 
 
         // Show Logged Assets button (moved from main UI)
