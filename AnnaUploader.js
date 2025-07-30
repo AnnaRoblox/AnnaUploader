@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     6.9
+// @version     7.0
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -38,7 +38,7 @@
     let uniqueCopies  = GM_getValue('uniqueCopies', 1);     // Persist this setting
     let useDownload   = GM_getValue('useDownload', false);  // Persist this setting
     let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false); // Persist this setting
-    // NEW SETTING: Slip Mode Pixel Method - 'all_pixels', '1-3_random', or '1-4_random_single_pixel'
+    // NEW SETTING: Slip Mode Pixel Method - 'all_pixels', '1-3_random', '1-4_random_single_pixel', or 'random_single_pixel_full_random_color'
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
 
     // Mass upload mode variables
@@ -319,7 +319,7 @@
 
     /**
      * "Slip Mode": subtly randomizes pixels to create unique images.
-     * The method of randomization (all pixels, 1-3 random pixels, or 1 random pixel ±1-4) depends on `slipModePixelMethod`.
+     * The method of randomization (all pixels, 1-3 random pixels, 1 random pixel ±1-4, or 1 random pixel full random color) depends on `slipModePixelMethod`.
      * @param {File} file The original image file.
      * @param {string} origBase The base name of the original file.
      * @param {number} copyIndex The index of the copy (for naming).
@@ -347,7 +347,16 @@
                         data[pixelIndex+1]   = Math.min(255, Math.max(0, data[pixelIndex+1] + delta)); // Green
                         data[pixelIndex+2]   = Math.min(255, Math.max(0, data[pixelIndex+2] + delta)); // Blue
                     }
-                } else {
+                } else if (slipModePixelMethod === 'random_single_pixel_full_random_color') {
+                    // Select one random pixel and change it to a completely random color
+                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4; // Ensure it's the start of a pixel
+                    if (data[pixelIndex + 3] !== 0) { // Only modify if the pixel is not fully transparent
+                        data[pixelIndex] = Math.floor(Math.random() * 256);     // Random Red
+                        data[pixelIndex + 1] = Math.floor(Math.random() * 256); // Random Green
+                        data[pixelIndex + 2] = Math.floor(Math.random() * 256); // Random Blue
+                    }
+                }
+                else {
                     for (let i = 0; i < data.length; i += 4) {
                         if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
                             let delta;
@@ -1089,6 +1098,12 @@
         optionSingleRandom.value = '1-4_random_single_pixel';
         optionSingleRandom.textContent = 'Single Random Pixel (±1-4)';
         slipModePixelMethodSelect.appendChild(optionSingleRandom);
+
+        // Add the new 4th option for random single pixel with full random color
+        const optionFullRandomSinglePixel = document.createElement('option');
+        optionFullRandomSinglePixel.value = 'random_single_pixel_full_random_color';
+        optionFullRandomSinglePixel.textContent = 'Single Random Pixel (Full Random Color)';
+        slipModePixelMethodSelect.appendChild(optionFullRandomSinglePixel);
 
         // Set current value
         slipModePixelMethodSelect.value = slipModePixelMethod;
