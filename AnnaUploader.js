@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     7.0
-// @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
+// @version     7.1
+// @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader; now supports image resizing
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
 // @match       https://www.roblox.com/communities/*
@@ -41,6 +41,11 @@
     // NEW SETTING: Slip Mode Pixel Method - 'all_pixels', '1-3_random', '1-4_random_single_pixel', or 'random_single_pixel_full_random_color'
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
 
+    // NEW: Image resizing settings
+    let enableResize = GM_getValue('enableResize', false);
+    let resizeWidth = GM_getValue('resizeWidth', 300);
+    let resizeHeight = GM_getValue('resizeHeight', 300);
+
     // Mass upload mode variables
     let massMode    = false; // True if mass upload mode is active
     let massQueue   = [];    // Array to hold files/metadata for mass upload
@@ -52,87 +57,57 @@
     let uiContainer; // Reference to the main UI container element
     let settingsModal; // Reference to the settings modal element
 
-    /**
-     * Utility function to extract the base name of a filename (without extension).
-     * @param {string} filename The full filename.
-     * @returns {string} The filename without its extension.
-     */
     function baseName(filename) {
         return filename.replace(/\.[^/.]+$/, '');
     }
 
-    /**
-     * Loads the asset log from GM_getValue storage.
-     * @returns {Object} The parsed asset log, or an empty object if parsing fails.
-     */
     function loadLog() {
         const raw = GM_getValue(STORAGE_KEY, '{}');
         try { return JSON.parse(raw); }
         catch { return {}; }
     }
 
-    /**
-     * Saves the asset log to GM_setValue storage.
-     * @param {Object} log The asset log object to save.
-     */
     function saveLog(log) {
         GM_setValue(STORAGE_KEY, JSON.stringify(log));
     }
 
-    /**
-     * Logs an uploaded asset's details.
-     * @param {string} id The asset ID.
-     * @param {string|null} imageURL The URL of the asset's image.
-     * @param {string} name The name of the asset.
-     */
     function logAsset(id, imageURL, name) {
         const log = loadLog();
         log[id] = {
             date: new Date().toISOString(),
-            image: imageURL || log[id]?.image || null, // Preserve existing image if new one is null
-            name: name || log[id]?.name || '(unknown)' // Preserve existing name if new one is null
+            image: imageURL || log[id]?.image || null,
+            name: name || log[id]?.name || '(unknown)'
         };
         saveLog(log);
         console.log(`[AssetLogger] logged asset ${id} at ${log[id].date}, name: ${log[id].name}, image: ${log[id].image || "none"}`);
     }
 
-    /**
-     * Scans the current page for Roblox asset links and logs them.
-     * Runs periodically.
-     */
     function scanForAssets() {
         console.log('[AssetLogger] scanning for assets…');
         document.querySelectorAll('[href]').forEach(el => {
-            // Match asset IDs from various Roblox URLs
             let m = el.href.match(/(?:https?:\/\/create\.roblox\.com)?\/store\/asset\/(\d+)/)
                  || el.href.match(/\/dashboard\/creations\/store\/(\d+)\/configure/);
             if (m) {
                 const id = m[1];
                 let image = null;
-                const container = el.closest('*'); // Find the closest parent element to search for image/name
+                const container = el.closest('*');
                 const img = container?.querySelector('img');
                 if (img?.src) image = img.src;
                 let name = null;
-                const nameEl = container?.querySelector('span.MuiTypography-root'); // Common element for asset names
+                const nameEl = container?.querySelector('span.MuiTypography-root');
                 if (nameEl) name = nameEl.textContent.trim();
                 logAsset(id, image, name);
             }
         });
     }
-    // Start periodic scanning for new assets
     setInterval(scanForAssets, SCAN_INTERVAL_MS);
 
-    /**
-     * Fetches a new CSRF token from Roblox. This token is required for upload requests.
-     * @returns {Promise<string>} A promise that resolves with the CSRF token.
-     * @throws {Error} If the CSRF token cannot be fetched.
-     */
     async function fetchCSRFToken() {
         const resp = await fetch(ROBLOX_UPLOAD_URL, {
             method: 'POST',
-            credentials: 'include', // Important for sending cookies
+            credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}) // Empty body to trigger a 403 and get the token
+            body: JSON.stringify({})
         });
         if (resp.status === 403) {
             const tok = resp.headers.get('x-csrf-token');
@@ -145,10 +120,6 @@
         throw new Error('Cannot fetch CSRF token');
     }
 
-    /**
-     * Updates the status display in the UI.
-     * Shows progress for ongoing uploads or queued count in mass mode.
-     */
     function updateStatus() {
         if (!statusEl) return;
         if (massMode) {
@@ -156,26 +127,17 @@
         } else if (batchTotal > 0) {
             statusEl.textContent = `${completed} of ${batchTotal} processed`;
         } else {
-            statusEl.textContent = ''; // Clear status if nothing is happening
+            statusEl.textContent = '';
         }
     }
 
-    /**
-     * Uploads a single file to Roblox as a T-Shirt or Decal.
-     * Includes retry logic for common errors like bad CSRF token or moderated names.
-     * @param {File} file The file to upload.
-     * @param {number} assetType The type of asset (ASSET_TYPE_TSHIRT or ASSET_TYPE_DECAL).
-     * @param {number} [retries=0] Current retry count.
-     * @param {boolean} [forceName=false] Whether to force the default name for the asset.
-     * @returns {Promise<void>} A promise that resolves when the upload is attempted.
-     */
     async function uploadFile(file, assetType, retries = 0, forceName = false) {
         if (!csrfToken) {
             try {
                 await fetchCSRFToken();
             } catch (e) {
                 console.error("[Upload] Failed to fetch initial CSRF token:", e);
-                completed++; // Count this as a failed attempt to proceed with batch
+                completed++;
                 updateStatus();
                 return;
             }
@@ -186,19 +148,19 @@
             : { userId: USER_ID };
 
         const fd = new FormData();
-        fd.append('fileContent', file, file.name); // The actual image file
-        fd.append('request', JSON.stringify({ // JSON payload for the asset details
+        fd.append('fileContent', file, file.name);
+        fd.append('request', JSON.stringify({
             displayName,
-            description: FORCED_NAME, // Description is always the forced name
+            description: FORCED_NAME,
             assetType: assetType === ASSET_TYPE_TSHIRT ? "TShirt" : "Decal",
-            creationContext: { creator, expectedPrice: 0 } // Price is always 0
+            creationContext: { creator, expectedPrice: 0 }
         }));
 
         try {
             const resp = await fetch(ROBLOX_UPLOAD_URL, {
                 method: 'POST',
                 credentials: 'include',
-                headers: { 'x-csrf-token': csrfToken }, // Add CSRF token to headers
+                headers: { 'x-csrf-token': csrfToken },
                 body: fd
             });
             const txt = await resp.text();
@@ -206,57 +168,46 @@
                 console.error('[Upload] Failed to parse response JSON:', e, txt);
             }
 
-            // NEW ERROR CHECK: If response indicates account is banned
             if (json?.message && typeof json.message === 'string' && json.message.toLowerCase().includes('banned')) {
                 displayMessage('Upload failed: Your account appears to be banned. Cannot complete upload.', 'error');
                 console.error(`[Upload] Account banned for "${file.name}":`, txt);
                 completed++;
                 updateStatus();
-                return; // Stop processing this file
+                return;
             }
 
-            // Handle successful upload
             if (resp.ok && json?.assetId) {
                 logAsset(json.assetId, null, displayName);
-                completed++; // Increment on success
-                updateStatus(); // Update status immediately
-                return; // Exit after successful upload
+                completed++;
+                updateStatus();
+                return;
             }
 
-            // Retry logic for common errors (no increment here, the recursive call will eventually increment)
             if (json?.message === 'Asset name length is invalid.' && !forceName && retries < 5) {
                 console.warn(`[Upload] "${file.name}" name too long, retrying with default name. Retry ${retries + 1}.`);
-                return uploadFile(file, assetType, retries + 1, true); // Retry with forced name
+                return uploadFile(file, assetType, retries + 1, true);
             }
             if (resp.status === 400 && json?.message?.includes('moderated') && retries < 5) {
-                // If moderated, try again with default name (often resolves this)
                 console.warn(`[Upload] "${file.name}" content moderated, retrying with default name. Retry ${retries + 1}.`);
                 return uploadFile(file, assetType, retries + 1, true);
             }
             if (resp.status === 403 && retries < 5) {
-                // CSRF token invalid or expired, fetch new and retry
                 console.warn(`[Upload] "${file.name}" 403 Forbidden, fetching new CSRF and retrying. Retry ${retries + 1}.`);
-                csrfToken = null; // Clear token to force refetch
-                await fetchCSRFToken(); // Ensure a new token is fetched before retrying
+                csrfToken = null;
+                await fetchCSRFToken();
                 return uploadFile(file, assetType, retries + 1, forceName);
             }
 
-            // If we reach here, it's a final failure after retries or an unhandled HTTP error
             console.error(`[Upload] failed "${file.name}" [${resp.status}]`, txt);
-            completed++; // Increment even on final failure
-            updateStatus(); // Update status for failed upload
+            completed++;
+            updateStatus();
         } catch (e) {
             console.error(`[Upload] error during fetch for "${file.name}":`, e);
-            completed++; // Increment on network/unhandled JS error
-            updateStatus(); // Update status for error
+            completed++;
+            updateStatus();
         }
     }
 
-    /**
-     * Converts a WebP image File to a PNG File.
-     * @param {File} webpFile The WebP file to convert.
-     * @returns {Promise<File>} A promise that resolves with the converted PNG File object.
-     */
     function convertWebPToPng(webpFile) {
         return new Promise((resolve, reject) => {
             const img = new Image();
@@ -283,27 +234,46 @@
         });
     }
 
-    /**
-     * Processes an image file through a canvas, re-encoding it to the target type (defaulting to PNG).
-     * This can fix issues with malformed image data or incorrect MIME types.
-     * @param {File} file The original image file.
-     * @param {string} targetType The desired output MIME type (e.g., 'image/png').
-     * @returns {Promise<File>} A promise that resolves with the new, re-encoded File object.
-     */
-    function processImageThroughCanvas(file, targetType = 'image/png') {
+    // Resize image as a File to width x height (returns a new File)
+    function resizeImageFile(file, width, height) {
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
+                canvas.width = width;
+                canvas.height = height;
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-
+                ctx.drawImage(img, 0, 0, width, height);
                 canvas.toBlob(blob => {
                     if (blob) {
-                        // Preserve original base name, but update extension and type
-                        const newFileName = baseName(file.name) + (targetType === 'image/png' ? '.png' : '.jpeg'); // Simple extension logic
+                        // Preserve base name, but new extension png
+                        const newFileName = baseName(file.name) + '.png';
+                        resolve(new File([blob], newFileName, { type: 'image/png' }));
+                    } else {
+                        reject(new Error('Failed to resize image.'));
+                    }
+                }, 'image/png');
+            };
+            img.onerror = (e) => {
+                reject(new Error(`Failed to load image for resizing: ${e.message}`));
+            };
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
+    function processImageThroughCanvas(file, targetType = 'image/png', width = null, height = null) {
+        // Optionally resize if width/height provided
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = width || img.width;
+                canvas.height = height || img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob(blob => {
+                    if (blob) {
+                        const newFileName = baseName(file.name) + (targetType === 'image/png' ? '.png' : '.jpeg');
                         resolve(new File([blob], newFileName, { type: targetType }));
                     } else {
                         reject(new Error('Failed to process image through canvas.'));
@@ -317,98 +287,79 @@
         });
     }
 
-    /**
-     * "Slip Mode": subtly randomizes pixels to create unique images.
-     * The method of randomization (all pixels, 1-3 random pixels, 1 random pixel ±1-4, or 1 random pixel full random color) depends on `slipModePixelMethod`.
-     * @param {File} file The original image file.
-     * @param {string} origBase The base name of the original file.
-     * @param {number} copyIndex The index of the copy (for naming).
-     * @returns {Promise<File>} A promise that resolves with the new unique image File object.
-     */
-    function makeUniqueFile(file, origBase, copyIndex) {
+    function makeUniqueFile(file, origBase, copyIndex, resizeW = null, resizeH = null) {
         return new Promise(resolve => {
             const img = new Image();
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
+                canvas.width = resizeW || img.width;
+                canvas.height = resizeH || img.height;
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const data = imageData.data; // Pixel data: [R, G, B, A, R, G, B, A, ...]
+                const data = imageData.data;
 
                 if (slipModePixelMethod === '1-4_random_single_pixel') {
-                    // Select one random pixel and adjust its color channels by a random delta of ±1 to ±4
-                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4; // Ensure it's the start of a pixel
-                    if (data[pixelIndex + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
-                        const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 4) + 1); // Random delta between 1 and 4
-                        data[pixelIndex]     = Math.min(255, Math.max(0, data[pixelIndex]     + delta)); // Red
-                        data[pixelIndex+1]   = Math.min(255, Math.max(0, data[pixelIndex+1] + delta)); // Green
-                        data[pixelIndex+2]   = Math.min(255, Math.max(0, data[pixelIndex+2] + delta)); // Blue
+                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4;
+                    if (data[pixelIndex + 3] !== 0) {
+                        const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 4) + 1);
+                        data[pixelIndex]     = Math.min(255, Math.max(0, data[pixelIndex]     + delta));
+                        data[pixelIndex+1]   = Math.min(255, Math.max(0, data[pixelIndex+1] + delta));
+                        data[pixelIndex+2]   = Math.min(255, Math.max(0, data[pixelIndex+2] + delta));
                     }
                 } else if (slipModePixelMethod === 'random_single_pixel_full_random_color') {
-                    // Select one random pixel and change it to a completely random color
-                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4; // Ensure it's the start of a pixel
-                    if (data[pixelIndex + 3] !== 0) { // Only modify if the pixel is not fully transparent
-                        data[pixelIndex] = Math.floor(Math.random() * 256);     // Random Red
-                        data[pixelIndex + 1] = Math.floor(Math.random() * 256); // Random Green
-                        data[pixelIndex + 2] = Math.floor(Math.random() * 256); // Random Blue
+                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4;
+                    if (data[pixelIndex + 3] !== 0) {
+                        data[pixelIndex] = Math.floor(Math.random() * 256);
+                        data[pixelIndex + 1] = Math.floor(Math.random() * 256);
+                        data[pixelIndex + 2] = Math.floor(Math.random() * 256);
                     }
                 }
                 else {
                     for (let i = 0; i < data.length; i += 4) {
-                        if (data[i + 3] !== 0) { // Check if alpha channel is not zero (i.e., not transparent)
+                        if (data[i + 3] !== 0) {
                             let delta;
                             if (slipModePixelMethod === 'all_pixels') {
-                                // Adjust all color channels by a random delta of ±1
                                 delta = (Math.random() < 0.5 ? -1 : 1);
-                                data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
-                                data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
-                                data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                                data[i]     = Math.min(255, Math.max(0, data[i]     + delta));
+                                data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta));
+                                data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta));
                             } else if (slipModePixelMethod === '1-3_random') {
-                                // Adjust all color channels by a random delta of ±1 to ±3
                                 delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1);
-                                data[i]     = Math.min(255, Math.max(0, data[i]     + delta)); // Red
-                                data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta)); // Green
-                                data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta)); // Blue
+                                data[i]     = Math.min(255, Math.max(0, data[i]     + delta));
+                                data[i+1]   = Math.min(255, Math.max(0, data[i+1] + delta));
+                                data[i+2]   = Math.min(255, Math.max(0, data[i+2] + delta));
                             }
                         }
                     }
                 }
-                ctx.putImageData(imageData, 0, 0); // Put modified data back to canvas
+                ctx.putImageData(imageData, 0, 0);
 
                 canvas.toBlob(blob => {
-                    const ext = 'png'; // Always output PNG after processing, especially if converted from WebP
-                    const newName = `${origBase}_${copyIndex}.${ext}`; // Create new name with index
-                    resolve(new File([blob], newName, { type: 'image/png' })); // Resolve with new File object as PNG
-                }, 'image/png'); // Always convert to PNG
+                    const ext = 'png';
+                    const newName = `${origBase}_${copyIndex}.${ext}`;
+                    resolve(new File([blob], newName, { type: 'image/png' }));
+                }, 'image/png');
             };
-            img.src = URL.createObjectURL(file); // Load image from file blob URL
+            img.src = URL.createObjectURL(file);
         });
     }
 
-    /**
-     * Handles file selection from input or paste events.
-     * Depending on `massMode`, it either queues files or initiates immediate uploads.
-     * @param {FileList|File[]} files The list of files selected.
-     * @param {number|null} assetType The asset type (TSHIRT, DECAL, or null for 'both').
-     * @param {boolean} [both=false] If true, upload as both T-Shirt and Decal.
-     */
     async function handleFileSelect(files, assetType, both = false) {
         if (!files?.length) return;
 
         const downloadsMap = {};
         const copies = useMakeUnique ? uniqueCopies : 1;
+        const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
 
         if (massMode) {
-            // In mass mode, add files to the queue after processing
             displayMessage('Processing files to add to queue...', 'info');
             const processingTasks = [];
             for (const original of files) {
                 let fileToProcess = original;
 
-                // 1. WebP Conversion (always happens first if needed)
+                // 1. WebP Conversion
                 if (original.type === 'image/webp') {
                     displayMessage(`Converting ${original.name} from WebP to PNG...`, 'info');
                     try {
@@ -417,32 +368,52 @@
                     } catch (error) {
                         displayMessage(`Failed to convert ${original.name}: ${error.message}`, 'error');
                         console.error(`[Conversion] Failed to convert ${original.name}:`, error);
-                        continue; // Skip this file if conversion fails
+                        continue;
                     }
                 }
 
-                // 2. Force Canvas Upload (if enabled AND not already handled by makeUniqueFile)
-                // If useMakeUnique is true, makeUniqueFile already processes through canvas, so no need to double process.
+                // 2. Optional resizing
+                if (resizeActive) {
+                    displayMessage(`Resizing ${fileToProcess.name} to ${resizeWidth}x${resizeHeight}...`, 'info');
+                    try {
+                        fileToProcess = await resizeImageFile(fileToProcess, Number(resizeWidth), Number(resizeHeight));
+                        displayMessage(`${fileToProcess.name} resized.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to resize ${fileToProcess.name}: ${error.message}`, 'error');
+                        console.error(`[Resize] Failed to resize ${fileToProcess.name}:`, error);
+                        continue;
+                    }
+                }
+
+                // 3. Force Canvas Upload
                 let fileAfterCanvasProcessing = fileToProcess;
                 if (useForceCanvasUpload && !useMakeUnique) {
                     displayMessage(`Processing ${fileToProcess.name} through canvas...`, 'info');
                     try {
-                        fileAfterCanvasProcessing = await processImageThroughCanvas(fileToProcess);
+                        fileAfterCanvasProcessing = await processImageThroughCanvas(
+                            fileToProcess, 'image/png',
+                            resizeActive ? Number(resizeWidth) : null,
+                            resizeActive ? Number(resizeHeight) : null
+                        );
                         displayMessage(`${fileToProcess.name} processed through canvas.`, 'success');
                     } catch (error) {
                         displayMessage(`Failed to process ${fileToProcess.name} through canvas: ${error.message}`, 'error');
                         console.error(`[Canvas Process] Failed to process ${fileToProcess.name}:`, error);
-                        continue; // Skip this file if canvas processing fails
+                        continue;
                     }
                 }
 
-                const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
+                const origBase = baseName(fileAfterCanvasProcessing.name);
                 for (let i = 1; i <= copies; i++) {
                     processingTasks.push(
                         (async () => {
                             const fileForQueue = useMakeUnique
-                                ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
-                                : fileAfterCanvasProcessing; // Use the file after potential canvas processing
+                                ? await makeUniqueFile(
+                                    fileAfterCanvasProcessing, origBase, i,
+                                    resizeActive ? Number(resizeWidth) : null,
+                                    resizeActive ? Number(resizeHeight) : null
+                                )
+                                : fileAfterCanvasProcessing;
 
                             if (both) {
                                 massQueue.push({ f: fileForQueue, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
@@ -454,23 +425,22 @@
                     );
                 }
             }
-            await Promise.all(processingTasks); // Wait for all files to be processed and queued
+            await Promise.all(processingTasks);
             displayMessage(`${processingTasks.length} files added to queue!`, 'success');
-            updateStatus(); // Update status to show queued items
+            updateStatus();
         } else {
-            // Not in mass mode, proceed with immediate upload
             const totalFilesToUpload = files.length * (both ? 2 : 1) * copies;
-            batchTotal = totalFilesToUpload; // Set total for immediate batch
+            batchTotal = totalFilesToUpload;
             completed = 0;
             updateStatus();
             displayMessage(`Starting upload of ${batchTotal} files...`, 'info');
 
-            const uploadPromises = []; // Array to hold upload promises
+            const uploadPromises = [];
 
             for (const original of files) {
                 let fileToProcess = original;
 
-                // 1. WebP Conversion (always happens first if needed)
+                // 1. WebP Conversion
                 if (original.type === 'image/webp') {
                     displayMessage(`Converting ${original.name} from WebP to PNG...`, 'info');
                     try {
@@ -479,31 +449,52 @@
                     } catch (error) {
                         displayMessage(`Failed to convert ${original.name}: ${error.message}`, 'error');
                         console.error(`[Conversion] Failed to convert ${original.name}:`, error);
-                        continue; // Skip this file if conversion fails
+                        continue;
                     }
                 }
 
-                // 2. Force Canvas Upload (if enabled AND not already handled by makeUniqueFile)
+                // 2. Optional resizing
+                if (resizeActive) {
+                    displayMessage(`Resizing ${fileToProcess.name} to ${resizeWidth}x${resizeHeight}...`, 'info');
+                    try {
+                        fileToProcess = await resizeImageFile(fileToProcess, Number(resizeWidth), Number(resizeHeight));
+                        displayMessage(`${fileToProcess.name} resized.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to resize ${fileToProcess.name}: ${error.message}`, 'error');
+                        console.error(`[Resize] Failed to resize ${fileToProcess.name}:`, error);
+                        continue;
+                    }
+                }
+
+                // 3. Force Canvas Upload
                 let fileAfterCanvasProcessing = fileToProcess;
                 if (useForceCanvasUpload && !useMakeUnique) {
                     displayMessage(`Processing ${fileToProcess.name} through canvas...`, 'info');
                     try {
-                        fileAfterCanvasProcessing = await processImageThroughCanvas(fileToProcess);
+                        fileAfterCanvasProcessing = await processImageThroughCanvas(
+                            fileToProcess, 'image/png',
+                            resizeActive ? Number(resizeWidth) : null,
+                            resizeActive ? Number(resizeHeight) : null
+                        );
                         displayMessage(`${fileToProcess.name} processed through canvas.`, 'success');
                     } catch (error) {
                         displayMessage(`Failed to process ${fileToProcess.name} through canvas: ${error.message}`, 'error');
                         console.error(`[Canvas Process] Failed to process ${fileToProcess.name}:`, error);
-                        continue; // Skip this file if canvas processing fails
+                        continue;
                     }
                 }
 
-                const origBase = baseName(fileAfterCanvasProcessing.name); // Use the name from the potentially canvas-processed file
-                downloadsMap[origBase] = []; // Initialize for potential downloads
+                const origBase = baseName(fileAfterCanvasProcessing.name);
+                downloadsMap[origBase] = [];
 
                 for (let i = 1; i <= copies; i++) {
                     const fileToUpload = useMakeUnique
-                        ? await makeUniqueFile(fileAfterCanvasProcessing, origBase, i)
-                        : fileAfterCanvasProcessing; // Get the processed file
+                        ? await makeUniqueFile(
+                            fileAfterCanvasProcessing, origBase, i,
+                            resizeActive ? Number(resizeWidth) : null,
+                            resizeActive ? Number(resizeHeight) : null
+                        )
+                        : fileAfterCanvasProcessing;
 
                     if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
                     if (both) {
@@ -515,12 +506,10 @@
                 }
             }
 
-            // Wait for all immediate uploads to complete
             Promise.all(uploadPromises).then(() => {
                 console.log('[Uploader] batch done');
-                scanForAssets(); // Rescan for newly uploaded assets
+                scanForAssets();
                 displayMessage('Immediate upload batch complete!', 'success');
-                // Handle downloading of unique images if enabled
                 if (useMakeUnique && useDownload) {
                     for (const [origBase, fileList] of Object.entries(downloadsMap)) {
                         if (!fileList.length) continue;
@@ -545,34 +534,28 @@
         }
     }
 
-    /**
-     * Starts the mass upload process for all files currently in the queue.
-     */
     function startMassUpload() {
         if (!massQueue.length) {
             displayMessage('Nothing queued for mass upload!', 'info');
             return;
         }
 
-        batchTotal = massQueue.length; // Set total for this mass upload batch
-        completed = 0; // Reset completed counter for the new batch
+        batchTotal = massQueue.length;
+        completed = 0;
         updateStatus();
         displayMessage(`Starting mass upload of ${batchTotal} files...`, 'info');
 
-        // Create an array of promises for each upload task
         const tasks = massQueue.map(item => uploadFile(item.f, item.type, 0, item.forceName));
-        massQueue = []; // Clear the queue once uploads begin
+        massQueue = [];
 
-        // Wait for all uploads in the mass batch to complete
         Promise.all(tasks).then(() => {
             displayMessage('Mass upload complete!', 'success');
-            // Reset mass mode and UI elements after completion
             massMode = false;
             toggleBtn.textContent = 'Enable Mass Upload';
             startBtn.style.display = 'none';
-            scanForAssets(); // Rescan for all newly uploaded assets
-            batchTotal = completed = 0; // Reset progress counters for next operation
-            updateStatus(); // Final status update
+            scanForAssets();
+            batchTotal = completed = 0;
+            updateStatus();
         }).catch(error => {
             console.error("Mass upload encountered an error:", error);
             displayMessage('Mass upload finished with errors. Check console.', 'error');
@@ -584,11 +567,6 @@
         });
     }
 
-    /**
-     * Displays a custom modal message instead of `alert()`.
-     * @param {string} message The message to display.
-     * @param {'info'|'success'|'error'} [type='info'] The type of message for styling.
-     */
     function displayMessage(message, type = 'info') {
         const modal = document.createElement('div');
         Object.assign(modal.style, {
@@ -606,35 +584,27 @@
             textAlign: 'center',
             minWidth: '250px',
             transition: 'opacity 0.3s ease-in-out',
-            opacity: '0' // Start hidden for transition
+            opacity: '0'
         });
 
         if (type === 'success') {
-            modal.style.background = '#4CAF50'; // Green
+            modal.style.background = '#4CAF50';
         } else if (type === 'error') {
-            modal.style.background = '#f44336'; // Red
+            modal.style.background = '#f44336';
         }
 
         modal.textContent = message;
 
         document.body.appendChild(modal);
 
-        // Fade in
         setTimeout(() => modal.style.opacity = '1', 10);
 
-        // Fade out and remove after a delay
         setTimeout(() => {
             modal.style.opacity = '0';
             modal.addEventListener('transitionend', () => modal.remove());
         }, 3000);
     }
 
-    /**
-     * Displays a custom modal prompt instead of `prompt()`.
-     * @param {string} message The message to display in the prompt.
-     * @param {string} [defaultValue=''] The default value for the input field.
-     * @returns {Promise<string|null>} A promise that resolves with the input value or null if canceled.
-     */
     function customPrompt(message, defaultValue = '') {
         return new Promise(resolve => {
             const modal = document.createElement('div');
@@ -648,7 +618,7 @@
                 color: '#fff',
                 borderRadius: '8px',
                 boxShadow: '0 6px 15px rgba(0,0,0,0.4)',
-                zIndex: '10002', // Higher z-index than message modal
+                zIndex: '10002',
                 fontFamily: 'Inter, Arial, sans-serif',
                 textAlign: 'center',
                 minWidth: '300px',
@@ -731,7 +701,6 @@
             modal.appendChild(buttonContainer);
             document.body.appendChild(modal);
 
-            // Fade in
             setTimeout(() => modal.style.opacity = '1', 10);
 
             input.focus();
@@ -743,12 +712,6 @@
         });
     }
 
-    /**
-     * Helper to create styled buttons for both UI panels.
-     * @param {string} text The text content of the button.
-     * @param {function} fn The click handler function.
-     * @returns {HTMLButtonElement} The created button element.
-     */
     function createStyledButton(text, fn) {
         const b = document.createElement('button');
         b.textContent = text;
@@ -756,44 +719,40 @@
             padding: '10px',
             cursor: 'pointer',
             color: '#fff',
-            background: '#3a3a3a', // Darker button background
+            background: '#3a3a3a',
             border: '1px solid #555',
-            borderRadius: '5px', // Slightly more rounded
+            borderRadius: '5px',
             transition: 'background 0.2s ease-in-out',
             fontSize: '14px'
         });
-        b.onmouseover = () => b.style.background = '#505050'; // Hover effect
+        b.onmouseover = () => b.style.background = '#505050';
         b.onmouseout = () => b.style.background = '#3a3a3a';
         b.onclick = fn;
         return b;
     }
 
-    /**
-     * Creates and injects the AnnaUploader UI panel into the page.
-     */
     function createUI() {
-        // Assign to uiContainer for global access
         uiContainer = document.createElement('div');
         Object.assign(uiContainer.style, {
             position: 'fixed',
-            top: '10px', // Initial top position
+            top: '10px',
             right: '10px',
-            width: '260px',
-            background: '#1a1a1a', // Darker background
-            border: '2px solid #333', // Subtle border
-            color: '#e0e0e0', // Lighter text color
-            padding: '15px',
+            width: '280px', // Adjusted width
+            background: '#1a1a1a',
+            border: '2px solid #333',
+            color: '#e0e0e0',
+            padding: '15px 15px 15px 15px', // Adjusted padding
             zIndex: 10000,
             borderRadius: '8px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)', // Stronger shadow
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '10px', // More spacing
-            fontFamily: 'Inter, Arial, sans-serif', // Modern font
-            transition: 'top 0.3s ease-in-out' // Smooth transition for top position
+            gap: '10px',
+            fontFamily: 'Inter, Arial, sans-serif',
+            transition: 'top 0.3s ease-in-out'
         });
 
-        // Close button for the UI panel
+        // Close button
         const close = createStyledButton('×', () => uiContainer.remove());
         Object.assign(close.style, {
             position: 'absolute',
@@ -805,88 +764,102 @@
             color: '#e0e0e0',
             fontWeight: 'bold',
             transition: 'color 0.2s',
-            padding: '5px 8px' // Make it easier to click
+            padding: '5px 8px'
         });
         close.onmouseover = () => close.style.color = '#fff';
         close.onmouseout = () => close.style.color = '#e0e0e0';
         close.title = 'Close AnnaUploader';
         uiContainer.appendChild(close);
 
+        // Gear icon for settings
+        const settingsGear = createStyledButton('⚙️', () => {
+            createSettingsUI();
+        });
+        Object.assign(settingsGear.style, {
+            position: 'absolute',
+            top: '5px',
+            left: '8px',
+            background: 'transparent',
+            border: 'none',
+            fontSize: '18px',
+            color: '#e0e0e0',
+            fontWeight: 'bold',
+            transition: 'color 0.2s',
+            padding: '5px 8px',
+        });
+        settingsGear.onmouseover = () => settingsGear.style.color = '#fff';
+        settingsGear.onmouseout = () => settingsGear.style.color = '#e0e0e0';
+        settingsGear.title = 'Settings';
+        uiContainer.appendChild(settingsGear);
+
         const title = document.createElement('h3');
         title.textContent = 'AnnaUploader';
-        title.style.margin = '0 0 10px 0'; // More margin below title
-        title.style.color = '#4af'; // Accent color for title
+        title.style.margin = '0 0 10px 0';
+        title.style.color = '#4af';
         title.style.textAlign = 'center';
         uiContainer.appendChild(title);
 
-        // Upload T-Shirts button
         uiContainer.appendChild(createStyledButton('Upload T-Shirts', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_TSHIRT);
             i.click();
         }));
-        // Upload Decals button
         uiContainer.appendChild(createStyledButton('Upload Decals', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
             i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_DECAL);
             i.click();
         }));
-        // Upload Both button
         uiContainer.appendChild(createStyledButton('Upload Both', () => {
             const i = document.createElement('input');
             i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
-            i.onchange = e => handleFileSelect(e.target.files, null, true); // null means 'both'
+            i.onchange = e => handleFileSelect(e.target.files, null, true);
             i.click();
         }));
 
-        // Mass Upload toggle button
         toggleBtn = createStyledButton('Enable Mass Upload', () => {
             massMode = !massMode;
             toggleBtn.textContent = massMode ? 'Disable Mass Upload' : 'Enable Mass Upload';
-            startBtn.style.display = massMode ? 'block' : 'none'; // Show/hide start button
-            massQueue = []; // Clear queue when toggling mode
-            batchTotal = completed = 0; // Reset progress
-            updateStatus(); // Update status display
+            startBtn.style.display = massMode ? 'block' : 'none';
+            massQueue = [];
+            batchTotal = completed = 0;
+            updateStatus();
             displayMessage(`Mass Upload Mode: ${massMode ? 'Enabled' : 'Disabled'}`, 'info');
         });
         uiContainer.appendChild(toggleBtn);
 
-        // Start Mass Upload button (initially hidden)
         startBtn = createStyledButton('Start Mass Upload', startMassUpload);
         startBtn.style.display = 'none';
         Object.assign(startBtn.style, {
-            background: '#28a745', // Green for start
+            background: '#28a745',
             border: '1px solid #218838'
         });
         startBtn.onmouseover = () => startBtn.style.background = '#218838';
         startBtn.onmouseout = () => startBtn.style.background = '#28a745';
         uiContainer.appendChild(startBtn);
 
-        // Slip Mode toggle
         const slipBtn = createStyledButton(`Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`, () => {
             useMakeUnique = !useMakeUnique;
-            GM_setValue('useMakeUnique', useMakeUnique); // Save setting
+            GM_setValue('useMakeUnique', useMakeUnique);
             slipBtn.textContent = `Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`;
-            copiesInput.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide copies input
-            downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Show/hide download button
+            copiesInput.style.display = useMakeUnique ? 'block' : 'none';
+            downloadBtn.style.display = useMakeUnique ? 'block' : 'none';
 
-            if (!useMakeUnique) { // If turning Slip Mode off, also turn off download
+            if (!useMakeUnique) {
                 useDownload = false;
-                GM_setValue('useDownload', useDownload); // Save setting
+                GM_setValue('useDownload', useDownload);
                 downloadBtn.textContent = 'Download Images: Off';
             }
         });
         uiContainer.appendChild(slipBtn);
 
-        // Copies input for Slip Mode
         copiesInput = document.createElement('input');
         copiesInput.type = 'number'; copiesInput.min = '1'; copiesInput.value = uniqueCopies;
         Object.assign(copiesInput.style, {
             width: '100%',
             boxSizing: 'border-box',
-            display: useMakeUnique ? 'block' : 'none', // Initially hidden based on setting
+            display: useMakeUnique ? 'block' : 'none',
             padding: '8px',
             borderRadius: '4px',
             border: '1px solid #555',
@@ -898,34 +871,23 @@
             const v = parseInt(e.target.value, 10);
             if (v > 0) {
                 uniqueCopies = v;
-                GM_setValue('uniqueCopies', uniqueCopies); // Save setting
+                GM_setValue('uniqueCopies', uniqueCopies);
             }
-            else e.target.value = uniqueCopies; // Revert to valid value if invalid input
+            else e.target.value = uniqueCopies;
         };
         uiContainer.appendChild(copiesInput);
 
-        // Download Images toggle for Slip Mode
         downloadBtn = createStyledButton(`Download Images: ${useDownload ? 'On' : 'Off'}`, () => {
             useDownload = !useDownload;
-            GM_setValue('useDownload', useDownload); // Save setting
+            GM_setValue('useDownload', useDownload);
             downloadBtn.textContent = `Download Images: ${useDownload ? 'On' : 'Off'}`;
         });
-        downloadBtn.style.display = useMakeUnique ? 'block' : 'none'; // Initially hidden based on setting
+        downloadBtn.style.display = useMakeUnique ? 'block' : 'none';
         uiContainer.appendChild(downloadBtn);
 
-        // Force Upload (through Canvas) toggle - REMOVED from here, moved to settings modal
-        // forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
-        //     useForceCanvasUpload = !useForceCanvasUpload;
-        //     GM_setValue('useForceCanvasUpload', useForceCanvasUpload); // Save setting
-        //     forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
-        //     displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
-        // });
-        // uiContainer.appendChild(forceUploadBtn);
-
-        // Change ID button
         uiContainer.appendChild(createStyledButton('Change ID', async () => {
             const inp = await customPrompt("Enter your Roblox User ID/URL or Group URL:", USER_ID || '');
-            if (inp === null) return; // User cancelled
+            if (inp === null) return;
             let id, isGrp = false;
             const um = inp.match(/users\/(\d+)/);
             const gm = inp.match(/communities\/(\d+)/);
@@ -936,7 +898,7 @@
                 isGrp = true;
             } else {
                 id = inp.trim();
-                if (isNaN(id) || id === '') { // Check for empty string after trim as well
+                if (isNaN(id) || id === '') {
                     displayMessage('Invalid input. Please enter a number or a valid URL.', 'error');
                     return;
                 }
@@ -948,7 +910,6 @@
             displayMessage(`Set to ${isGrp ? 'Group' : 'User'} ID: ${USER_ID}`, 'success');
         }));
 
-        // "Use This Profile as ID" button (contextual)
         const pm = window.location.pathname.match(/^\/users\/(\d+)\/profile/);
         if (pm) {
             uiContainer.appendChild(createStyledButton('Use This Profile as ID', () => {
@@ -960,7 +921,6 @@
             }));
         }
 
-        // "Use This Group as ID" button (contextual)
         const gm = window.location.pathname.match(/^\/communities\/(\d+)/);
         if (gm) {
             uiContainer.appendChild(createStyledButton('Use This Group as ID', () => {
@@ -972,10 +932,7 @@
             }));
         }
 
-        // NEW: Settings button to open the settings modal
-        uiContainer.appendChild(createStyledButton('Settings', () => {
-            createSettingsUI();
-        }));
+        // Removed the old 'Settings' button here.
 
         const hint = document.createElement('div');
         hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
@@ -984,7 +941,6 @@
         hint.style.marginTop = '5px';
         uiContainer.appendChild(hint);
 
-        // Status element at the bottom
         statusEl = document.createElement('div');
         statusEl.style.fontSize = '13px'; statusEl.style.color = '#fff';
         statusEl.style.textAlign = 'center';
@@ -995,11 +951,8 @@
         document.body.appendChild(uiContainer);
     }
 
-    /**
-     * Creates and injects the AnnaUploader Settings UI modal into the page.
-     */
     function createSettingsUI() {
-        if (settingsModal) { // If settings modal already exists, just show it
+        if (settingsModal) {
             settingsModal.style.display = 'flex';
             return;
         }
@@ -1011,22 +964,21 @@
             left: '50%',
             transform: 'translate(-50%, -50%)',
             width: '300px',
-            background: '#1a1a1a', // Darker background
-            border: '2px solid #333', // Subtle border
-            color: '#e0e0e0', // Lighter text color
+            background: '#1a1a1a',
+            border: '2px solid #333',
+            color: '#e0e0e0',
             padding: '20px',
-            zIndex: 10005, // Higher than main UI
+            zIndex: 10005,
             borderRadius: '10px',
-            boxShadow: '0 6px 20px rgba(0,0,0,0.6)', // Stronger shadow
+            boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '15px', // More spacing
-            fontFamily: 'Inter, Arial, sans-serif', // Modern font
+            gap: '15px',
+            fontFamily: 'Inter, Arial, sans-serif',
         });
 
-        // Close button for the settings modal
         const closeSettings = createStyledButton('×', () => {
-            settingsModal.style.display = 'none'; // Just hide, don't remove for re-opening
+            settingsModal.style.display = 'none';
         });
         Object.assign(closeSettings.style, {
             position: 'absolute',
@@ -1052,15 +1004,14 @@
         title.style.textAlign = 'center';
         settingsModal.appendChild(title);
 
-        // Moved: Use default Name toggle into settings
         const nameBtn = createStyledButton(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
             useForcedName = !useForcedName;
-            GM_setValue('useForcedName', useForcedName); // Save setting
+            GM_setValue('useForcedName', useForcedName);
             nameBtn.textContent = `Use default Name: ${useForcedName ? 'On' : 'Off'}`;
         });
         settingsModal.appendChild(nameBtn);
 
-        // NEW SETTING: Slip Mode Pixel Method
+        // Slip Mode Pixel Method setting
         const slipModePixelMethodLabel = document.createElement('label');
         slipModePixelMethodLabel.textContent = 'Slip Mode Pixel Method:';
         Object.assign(slipModePixelMethodLabel.style, {
@@ -1099,37 +1050,115 @@
         optionSingleRandom.textContent = 'Single Random Pixel (±1-4)';
         slipModePixelMethodSelect.appendChild(optionSingleRandom);
 
-        // Add the new 4th option for random single pixel with full random color
         const optionFullRandomSinglePixel = document.createElement('option');
         optionFullRandomSinglePixel.value = 'random_single_pixel_full_random_color';
         optionFullRandomSinglePixel.textContent = 'Single Random Pixel (Full Random Color)';
         slipModePixelMethodSelect.appendChild(optionFullRandomSinglePixel);
 
-        // Set current value
         slipModePixelMethodSelect.value = slipModePixelMethod;
 
         slipModePixelMethodSelect.onchange = (e) => {
             slipModePixelMethod = e.target.value;
-            GM_setValue('slipModePixelMethod', slipModePixelMethod); // Save setting
+            GM_setValue('slipModePixelMethod', slipModePixelMethod);
             displayMessage(`Slip Mode Pixel Method set to: ${e.target.options[e.target.selectedIndex].text}`, 'success');
         };
         settingsModal.appendChild(slipModePixelMethodSelect);
 
-        // Force Upload (through Canvas) toggle - MOVED here from main UI
+        // Force Upload (through Canvas) toggle
         const forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
             useForceCanvasUpload = !useForceCanvasUpload;
-            GM_setValue('useForceCanvasUpload', useForceCanvasUpload); // Save setting
+            GM_setValue('useForceCanvasUpload', useForceCanvasUpload);
             forceUploadBtn.textContent = `Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`;
             displayMessage(`Force Upload Mode: ${useForceCanvasUpload ? 'Enabled' : 'Disabled'}`, 'info');
         });
         settingsModal.appendChild(forceUploadBtn);
 
+        // IMAGE RESIZE FEATURE
+        const resizeContainer = document.createElement('div');
+        resizeContainer.style.display = 'flex';
+        resizeContainer.style.flexDirection = 'column';
+        resizeContainer.style.gap = '5px';
+        resizeContainer.style.margin = '10px 0';
 
-        // Show Logged Assets button (moved from main UI)
+        const resizeToggleBtn = createStyledButton(`Resize Images: ${enableResize ? 'On' : 'Off'}`, () => {
+            enableResize = !enableResize;
+            GM_setValue('enableResize', enableResize);
+            resizeToggleBtn.textContent = `Resize Images: ${enableResize ? 'On' : 'Off'}`;
+            widthInput.disabled = heightInput.disabled = !enableResize;
+        });
+        resizeContainer.appendChild(resizeToggleBtn);
+
+        // Input fields for width/height
+        const inputRow = document.createElement('div');
+        inputRow.style.display = 'flex';
+        inputRow.style.gap = '7px';
+        inputRow.style.alignItems = 'center';
+
+        const widthInput = document.createElement('input');
+        widthInput.type = 'number';
+        widthInput.min = '1';
+        widthInput.value = resizeWidth;
+        widthInput.placeholder = 'Width';
+        widthInput.style.width = '60px';
+        widthInput.style.padding = '6px';
+        widthInput.style.borderRadius = '4px';
+        widthInput.style.border = '1px solid #555';
+        widthInput.style.background = '#333';
+        widthInput.style.color = '#fff';
+        widthInput.disabled = !enableResize;
+        widthInput.onchange = () => {
+            let val = Math.max(1, parseInt(widthInput.value, 10) || 512);
+            widthInput.value = val;
+            resizeWidth = val;
+            GM_setValue('resizeWidth', resizeWidth);
+        };
+        inputRow.appendChild(widthInput);
+
+        const xLabel = document.createElement('span');
+        xLabel.textContent = '×';
+        xLabel.style.color = '#ccc';
+        inputRow.appendChild(xLabel);
+
+        const heightInput = document.createElement('input');
+        heightInput.type = 'number';
+        heightInput.min = '1';
+        heightInput.value = resizeHeight;
+        heightInput.placeholder = 'Height';
+        heightInput.style.width = '60px';
+        heightInput.style.padding = '6px';
+        heightInput.style.borderRadius = '4px';
+        heightInput.style.border = '1px solid #555';
+        heightInput.style.background = '#333';
+        heightInput.style.color = '#fff';
+        heightInput.disabled = !enableResize;
+        heightInput.onchange = () => {
+            let val = Math.max(1, parseInt(heightInput.value, 10) || 512);
+            heightInput.value = val;
+            resizeHeight = val;
+            GM_setValue('resizeHeight', resizeHeight);
+        };
+        inputRow.appendChild(heightInput);
+
+        const pxLabel = document.createElement('span');
+        pxLabel.textContent = 'px';
+        pxLabel.style.color = '#bbb';
+        inputRow.appendChild(pxLabel);
+
+        resizeContainer.appendChild(inputRow);
+
+        const resizeDesc = document.createElement('div');
+        resizeDesc.textContent = "If enabled, images will be resized before upload. Applies to Slip Mode too.";
+        resizeDesc.style.fontSize = '12px';
+        resizeDesc.style.color = '#aaa';
+        resizeDesc.style.marginTop = '3px';
+        resizeContainer.appendChild(resizeDesc);
+
+        settingsModal.appendChild(resizeContainer);
+
         settingsModal.appendChild(createStyledButton('Show Logged Assets', () => {
             const log = loadLog();
             const entries = Object.entries(log);
-            const w = window.open('', '_blank'); // Open a new blank window
+            const w = window.open('', '_blank');
             w.document.write(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Logged Assets</title>
 <style>
@@ -1145,7 +1174,7 @@ a:hover { text-decoration:underline; }
 button { margin-bottom:20px; color:#fff; background:#3a3a3a; border:1px solid #555; padding:8px 15px; border-radius:5px; cursor:pointer; }
 button:hover { background:#505050; }
 </style></head><body>
-<button onclick="document.body.style.background=(document.body.style.background==='#121212'?'#f0f0f0':'#121212');document.body.style.color=(document.body.style.color==='#f0f0f0'?'#121212':'#f0f0f0');document.querySelectorAll('li').forEach(li=>li.style.background=(document.body.style.background==='#121212'?'#1e1e1e':'#e0e0e0'));document.querySelectorAll('a').forEach(a=>a.style.color=(document.body.style.background==='#121212'?'#7cf':'#007bff'));document.querySelectorAll('img').forEach(i=>i.style.border=(document.body.style.background==='#121212'?'1px solid #444':'1px solid #ccc'));">Toggle Theme</button>
+<button onclick="document.body.style.background=(document.body.style.background==='#121212'?'#f0f0f0':'#121212');document.body.style.color=(document.body.style.color==='#f0f0f0'?'#121212':'#f0f0f0');d[...]
 <h1>Logged Assets</h1>
 ${ entries.length ? `<ul>${entries.map(([id,entry])=>
     `<li>
@@ -1157,69 +1186,80 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
         <div class="asset-name">${entry.name}</div>
     </li>`).join('') }</ul>` : `<p style="color:#888;"><em>No assets logged yet.</em></p>`}
 </body></html>`);
-            w.document.close(); // Close the document stream to ensure content is rendered
+            w.document.close();
         }));
 
         document.body.appendChild(settingsModal);
     }
 
-    /**
-     * Handles paste events, attempting to extract image data and process it for upload.
-     * @param {ClipboardEvent} e The paste event object.
-     */
     async function handlePaste(e) {
         const items = e.clipboardData?.items;
         if (!items) return;
 
+        const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
+
         for (const it of items) {
             if (it.type.startsWith('image')) {
-                e.preventDefault(); // Prevent default paste behavior
+                e.preventDefault();
                 const blob = it.getAsFile();
-                const ts = new Date().toISOString().replace(/[^a-z0-9]/gi,'_'); // Timestamp for default name
+                const ts = new Date().toISOString().replace(/[^a-z0-9]/gi,'_');
 
                 const pastedName = await customPrompt('Enter a name for the image (no extension):', `pasted_${ts}`);
-                if (pastedName === null) return; // User cancelled
+                if (pastedName === null) return;
                 let name = pastedName.trim() || `pasted_${ts}`;
-                let filename = name.endsWith('.png') ? name : `${name}.png`; // Default to PNG
+                let filename = name.endsWith('.png') ? name : `${name}.png`;
 
                 let fileToProcess = new File([blob], filename, {type: blob.type});
 
-                // 1. WebP Conversion (always happens first if needed)
                 if (blob.type === 'image/webp') {
                     displayMessage(`Converting pasted WebP image to PNG...`, 'info');
                     try {
                         fileToProcess = await convertWebPToPng(fileToProcess);
-                        // Update filename and type to reflect PNG
-                        name = baseName(fileToProcess.name); // Get base name from the new PNG file
-                        filename = fileToProcess.name; // Use the full name of the new PNG file
+                        name = baseName(fileToProcess.name);
+                        filename = fileToProcess.name;
                         displayMessage(`Pasted WebP converted to PNG.`, 'success');
                     } catch (error) {
                         displayMessage(`Failed to convert pasted WebP: ${error.message}`, 'error');
                         console.error(`[Conversion] Failed to convert pasted WebP:`, error);
-                        return; // Stop processing this paste if conversion fails
+                        return;
                     }
                 }
 
-                // 2. Force Canvas Upload (if enabled AND not already handled by makeUniqueFile)
-                // For pasted images, makeUniqueFile is not directly called here, so always apply if force upload is on.
+                // Resize if enabled
+                if (resizeActive) {
+                    displayMessage(`Resizing pasted image to ${resizeWidth}x${resizeHeight}...`, 'info');
+                    try {
+                        fileToProcess = await resizeImageFile(fileToProcess, Number(resizeWidth), Number(resizeHeight));
+                        name = baseName(fileToProcess.name);
+                        filename = fileToProcess.name;
+                        displayMessage(`Pasted image resized.`, 'success');
+                    } catch (error) {
+                        displayMessage(`Failed to resize pasted image: ${error.message}`, 'error');
+                        console.error(`[Resize] Failed to resize pasted image:`, error);
+                        return;
+                    }
+                }
+
                 if (useForceCanvasUpload) {
                     displayMessage(`Processing pasted image through canvas...`, 'info');
                     try {
-                        fileToProcess = await processImageThroughCanvas(fileToProcess);
-                        // Update filename and type to reflect PNG after canvas processing
+                        fileToProcess = await processImageThroughCanvas(
+                            fileToProcess, 'image/png',
+                            resizeActive ? Number(resizeWidth) : null,
+                            resizeActive ? Number(resizeHeight) : null
+                        );
                         name = baseName(fileToProcess.name);
                         filename = fileToProcess.name;
                         displayMessage(`Pasted image processed through canvas.`, 'success');
                     } catch (error) {
                         displayMessage(`Failed to process pasted image through canvas: ${error.message}`, 'error');
                         console.error(`[Canvas Process] Failed to process pasted image:`, error);
-                        return; // Stop processing this paste if canvas processing fails
+                        return;
                     }
                 }
 
-                // Modified: Added 'B' option for 'both'
                 const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, B=Both, or C=Cancel?', 'D');
-                if (!typeChoice) return; // User cancelled
+                if (!typeChoice) return;
                 const t = typeChoice.trim().toUpperCase();
 
                 let uploadAsBoth = false;
@@ -1236,18 +1276,16 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
                     return;
                 }
 
-                // Process the pasted file like any other selected file
                 handleFileSelect([fileToProcess], type, uploadAsBoth);
-                break; // Process only the first image found
+                break;
             }
         }
     }
 
-    // Initialize the UI and event listeners when the window loads
     window.addEventListener('load', () => {
         createUI();
         document.addEventListener('paste', handlePaste);
-        scanForAssets(); // Initial scan
+        scanForAssets();
         console.log('[AnnaUploader] initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
     });
 
