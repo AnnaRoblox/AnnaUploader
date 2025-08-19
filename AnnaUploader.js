@@ -2,7 +2,7 @@
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
 // @version     7.1
-// @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader; now supports image resizing
+// @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
 // @match       https://www.roblox.com/communities/*
