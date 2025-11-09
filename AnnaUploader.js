@@ -1,20 +1,20 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     7.1
+// @version     7.2
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
 // @match       https://www.roblox.com/communities/*
 // @match       https://www.roblox.com/home/*
-// @run-at      document-idle
+// @run-at      document-start
 // @grant       GM_getValue
 // @grant       GM_setValue
 // @require     https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @require     https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
 // @license     MIT
 // @downloadURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
-// @updateURL   https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
+// @updateURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
 // ==/UserScript==
 
 (function() {
@@ -31,6 +31,7 @@
     const SCAN_INTERVAL_MS = 10_000;
 
     // Script configuration variables, managed with Tampermonkey's GM_getValue/GM_setValue
+    let enableAssetLogging = GM_getValue('enableAssetLogging', false); // NEW: Make asset logging optional
     let USER_ID       = GM_getValue('userId', null);
     let IS_GROUP      = GM_getValue('isGroup', false);
     let useForcedName = GM_getValue('useForcedName', false); // Persist this setting
@@ -38,10 +39,10 @@
     let uniqueCopies  = GM_getValue('uniqueCopies', 1);     // Persist this setting
     let useDownload   = GM_getValue('useDownload', false);  // Persist this setting
     let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false); // Persist this setting
-    // NEW SETTING: Slip Mode Pixel Method - 'all_pixels', '1-3_random', '1-4_random_single_pixel', or 'random_single_pixel_full_random_color'
+    //  Slip Mode Pixel Method - 'all_pixels', '1-3_random', '1-4_random_single_pixel', or 'random_single_pixel_full_random_color'
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
 
-    // NEW: Image resizing settings
+    // Image resizing settings
     let enableResize = GM_getValue('enableResize', false);
     let resizeWidth = GM_getValue('resizeWidth', 300);
     let resizeHeight = GM_getValue('resizeHeight', 300);
@@ -52,6 +53,7 @@
     let batchTotal  = 0;     // Total items to process in current batch/queue
     let completed   = 0;     // Number of items completed in current batch/queue
 
+    let scanIntervalId = null; // To hold the scanner interval ID
     let csrfToken = null; // Roblox CSRF token for authenticated requests
     let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn; // UI elements (removed forceUploadBtn from here)
     let uiContainer; // Reference to the main UI container element
@@ -100,7 +102,18 @@
             }
         });
     }
-    setInterval(scanForAssets, SCAN_INTERVAL_MS);
+
+    // NEW: Function to start/stop the asset scanner interval
+    function toggleAssetScanner(enable) {
+        if (enable && !scanIntervalId) {
+            scanIntervalId = setInterval(scanForAssets, SCAN_INTERVAL_MS);
+            console.log('[AssetLogger] Scanner started.');
+        } else if (!enable && scanIntervalId) {
+            clearInterval(scanIntervalId);
+            scanIntervalId = null;
+            console.log('[AssetLogger] Scanner stopped.');
+        }
+    }
 
     async function fetchCSRFToken() {
         const resp = await fetch(ROBLOX_UPLOAD_URL, {
@@ -177,7 +190,9 @@
             }
 
             if (resp.ok && json?.assetId) {
-                logAsset(json.assetId, null, displayName);
+                if (enableAssetLogging) {
+                    logAsset(json.assetId, null, displayName);
+                }
                 completed++;
                 updateStatus();
                 return;
@@ -508,7 +523,9 @@
 
             Promise.all(uploadPromises).then(() => {
                 console.log('[Uploader] batch done');
-                scanForAssets();
+                if (enableAssetLogging) {
+                    scanForAssets();
+                }
                 displayMessage('Immediate upload batch complete!', 'success');
                 if (useMakeUnique && useDownload) {
                     for (const [origBase, fileList] of Object.entries(downloadsMap)) {
@@ -553,7 +570,9 @@
             massMode = false;
             toggleBtn.textContent = 'Enable Mass Upload';
             startBtn.style.display = 'none';
-            scanForAssets();
+            if (enableAssetLogging) {
+                scanForAssets();
+            }
             batchTotal = completed = 0;
             updateStatus();
         }).catch(error => {
@@ -1011,6 +1030,16 @@
         });
         settingsModal.appendChild(nameBtn);
 
+        // NEW: Asset Logging Toggle
+        const assetLoggingBtn = createStyledButton(`Asset Logging: ${enableAssetLogging ? 'On' : 'Off'}`, () => {
+            enableAssetLogging = !enableAssetLogging;
+            GM_setValue('enableAssetLogging', enableAssetLogging);
+            assetLoggingBtn.textContent = `Asset Logging: ${enableAssetLogging ? 'On' : 'Off'}`;
+            toggleAssetScanner(enableAssetLogging);
+            displayMessage(`Asset Logging: ${enableAssetLogging ? 'Enabled' : 'Disabled'}`, 'info');
+        });
+        settingsModal.appendChild(assetLoggingBtn);
+
         // Slip Mode Pixel Method setting
         const slipModePixelMethodLabel = document.createElement('label');
         slipModePixelMethodLabel.textContent = 'Slip Mode Pixel Method:';
@@ -1285,8 +1314,14 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
     window.addEventListener('load', () => {
         createUI();
         document.addEventListener('paste', handlePaste);
-        scanForAssets();
-        console.log('[AnnaUploader] initialized; asset scan every ' + (SCAN_INTERVAL_MS/1000) + 's');
+
+        if (enableAssetLogging) {
+            scanForAssets(); // Run an initial scan
+            console.log('[AnnaUploader] initialized; asset logging is ON. Scanner will run every ' + (SCAN_INTERVAL_MS/1000) + 's');
+        } else {
+            console.log('[AnnaUploader] initialized; asset logging is OFF.');
+        }
+        toggleAssetScanner(enableAssetLogging); // Start/stop the interval based on the setting
     });
 
 })();
