@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     7.2
+// @version     7.3
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -31,14 +31,14 @@
     const SCAN_INTERVAL_MS = 10_000;
 
     // Script configuration variables, managed with Tampermonkey's GM_getValue/GM_setValue
-    let enableAssetLogging = GM_getValue('enableAssetLogging', false); // NEW: Make asset logging optional
+    let enableAssetLogging = GM_getValue('enableAssetLogging', false);
     let USER_ID       = GM_getValue('userId', null);
     let IS_GROUP      = GM_getValue('isGroup', false);
-    let useForcedName = GM_getValue('useForcedName', false); // Persist this setting
-    let useMakeUnique = GM_getValue('useMakeUnique', false); // Persist this setting
-    let uniqueCopies  = GM_getValue('uniqueCopies', 1);     // Persist this setting
-    let useDownload   = GM_getValue('useDownload', false);  // Persist this setting
-    let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false); // Persist this setting
+    let useForcedName = GM_getValue('useForcedName', false);
+    let useMakeUnique = GM_getValue('useMakeUnique', false);
+    let uniqueCopies  = GM_getValue('uniqueCopies', 1);
+    let useDownload   = GM_getValue('useDownload', false);
+    let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false);
     //  Slip Mode Pixel Method - 'all_pixels', '1-3_random', '1-4_random_single_pixel', or 'random_single_pixel_full_random_color'
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
 
@@ -48,16 +48,16 @@
     let resizeHeight = GM_getValue('resizeHeight', 300);
 
     // Mass upload mode variables
-    let massMode    = false; // True if mass upload mode is active
-    let massQueue   = [];    // Array to hold files/metadata for mass upload
-    let batchTotal  = 0;     // Total items to process in current batch/queue
-    let completed   = 0;     // Number of items completed in current batch/queue
+    let massMode    = false;
+    let massQueue   = [];
+    let batchTotal  = 0;
+    let completed   = 0;
 
-    let scanIntervalId = null; // To hold the scanner interval ID
-    let csrfToken = null; // Roblox CSRF token for authenticated requests
-    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn; // UI elements (removed forceUploadBtn from here)
-    let uiContainer; // Reference to the main UI container element
-    let settingsModal; // Reference to the settings modal element
+    let scanIntervalId = null;
+    let csrfToken = null;
+    let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn;
+    let uiContainer;
+    let settingsModal;
 
     function baseName(filename) {
         return filename.replace(/\.[^/.]+$/, '');
@@ -103,7 +103,6 @@
         });
     }
 
-    // NEW: Function to start/stop the asset scanner interval
     function toggleAssetScanner(enable) {
         if (enable && !scanIntervalId) {
             scanIntervalId = setInterval(scanForAssets, SCAN_INTERVAL_MS);
@@ -226,14 +225,17 @@
     function convertWebPToPng(webpFile) {
         return new Promise((resolve, reject) => {
             const img = new Image();
+            const url = URL.createObjectURL(webpFile);
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = img.width;
                 canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
+                // Optimize for frequent reads
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 ctx.drawImage(img, 0, 0);
 
                 canvas.toBlob(blob => {
+                    URL.revokeObjectURL(url);
                     if (blob) {
                         const newFileName = webpFile.name.replace(/\.webp$/, '.png');
                         resolve(new File([blob], newFileName, { type: 'image/png' }));
@@ -243,9 +245,10 @@
                 }, 'image/png');
             };
             img.onerror = (e) => {
+                URL.revokeObjectURL(url);
                 reject(new Error(`Failed to load image for conversion: ${e.message}`));
             };
-            img.src = URL.createObjectURL(webpFile);
+            img.src = url;
         });
     }
 
@@ -253,15 +256,17 @@
     function resizeImageFile(file, width, height) {
         return new Promise((resolve, reject) => {
             const img = new Image();
+            const url = URL.createObjectURL(file);
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
-                const ctx = canvas.getContext('2d');
+                // Optimize for frequent reads
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 ctx.drawImage(img, 0, 0, width, height);
                 canvas.toBlob(blob => {
+                    URL.revokeObjectURL(url);
                     if (blob) {
-                        // Preserve base name, but new extension png
                         const newFileName = baseName(file.name) + '.png';
                         resolve(new File([blob], newFileName, { type: 'image/png' }));
                     } else {
@@ -270,23 +275,26 @@
                 }, 'image/png');
             };
             img.onerror = (e) => {
+                URL.revokeObjectURL(url);
                 reject(new Error(`Failed to load image for resizing: ${e.message}`));
             };
-            img.src = URL.createObjectURL(file);
+            img.src = url;
         });
     }
 
     function processImageThroughCanvas(file, targetType = 'image/png', width = null, height = null) {
-        // Optionally resize if width/height provided
         return new Promise((resolve, reject) => {
             const img = new Image();
+            const url = URL.createObjectURL(file);
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = width || img.width;
                 canvas.height = height || img.height;
-                const ctx = canvas.getContext('2d');
+                // Optimize for frequent reads
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                 canvas.toBlob(blob => {
+                    URL.revokeObjectURL(url);
                     if (blob) {
                         const newFileName = baseName(file.name) + (targetType === 'image/png' ? '.png' : '.jpeg');
                         resolve(new File([blob], newFileName, { type: targetType }));
@@ -296,42 +304,63 @@
                 }, targetType);
             };
             img.onerror = (e) => {
+                URL.revokeObjectURL(url);
                 reject(new Error(`Failed to load image for canvas processing: ${e.message}`));
             };
-            img.src = URL.createObjectURL(file);
+            img.src = url;
         });
     }
 
+    // OPTIMIZED: Smarter pixel manipulation to avoid lagging on large images
     function makeUniqueFile(file, origBase, copyIndex, resizeW = null, resizeH = null) {
         return new Promise(resolve => {
             const img = new Image();
+            const url = URL.createObjectURL(file);
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = resizeW || img.width;
                 canvas.height = resizeH || img.height;
-                const ctx = canvas.getContext('2d');
+
+                // VITAL: This setting drastically improves performance on Chrome for heavy read/write ops
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const data = imageData.data;
+                // Optimization: Only grab whole image data if we absolutely must (for 'all_pixels' modes)
+                // For single pixel modes, we will only touch one pixel.
 
-                if (slipModePixelMethod === '1-4_random_single_pixel') {
-                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4;
-                    if (data[pixelIndex + 3] !== 0) {
+                if (slipModePixelMethod === '1-4_random_single_pixel' || slipModePixelMethod === 'random_single_pixel_full_random_color') {
+                    // FAST PATH: Single Pixel Modification
+                    // Don't read the whole image! Just pick a random spot.
+                    const x = Math.floor(Math.random() * canvas.width);
+                    const y = Math.floor(Math.random() * canvas.height);
+                    const pixelData = ctx.getImageData(x, y, 1, 1);
+                    const data = pixelData.data;
+
+                    // Ensure we aren't modifying a fully transparent pixel (if relevant), though for anti-dupe it might not matter.
+                    // If transparent, we just shift it slightly off 0
+                    if (data[3] === 0) {
+                        data[3] = 1; // Make it essentially invisible but non-zero alpha
+                    }
+
+                    if (slipModePixelMethod === '1-4_random_single_pixel') {
                         const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 4) + 1);
-                        data[pixelIndex]     = Math.min(255, Math.max(0, data[pixelIndex]     + delta));
-                        data[pixelIndex+1]   = Math.min(255, Math.max(0, data[pixelIndex+1] + delta));
-                        data[pixelIndex+2]   = Math.min(255, Math.max(0, data[pixelIndex+2] + delta));
+                        data[0] = Math.min(255, Math.max(0, data[0] + delta));
+                        data[1] = Math.min(255, Math.max(0, data[1] + delta));
+                        data[2] = Math.min(255, Math.max(0, data[2] + delta));
+                    } else {
+                         // Full Random Color
+                        data[0] = Math.floor(Math.random() * 256);
+                        data[1] = Math.floor(Math.random() * 256);
+                        data[2] = Math.floor(Math.random() * 256);
                     }
-                } else if (slipModePixelMethod === 'random_single_pixel_full_random_color') {
-                    const pixelIndex = Math.floor(Math.random() * (data.length / 4)) * 4;
-                    if (data[pixelIndex + 3] !== 0) {
-                        data[pixelIndex] = Math.floor(Math.random() * 256);
-                        data[pixelIndex + 1] = Math.floor(Math.random() * 256);
-                        data[pixelIndex + 2] = Math.floor(Math.random() * 256);
-                    }
-                }
-                else {
+                    ctx.putImageData(pixelData, x, y);
+
+                } else {
+                    // SLOW PATH: Full Image Iteration (Necessary if user wants 'all_pixels')
+                    // We can't make this instant for 4k images in JS, but 'willReadFrequently' helps a lot.
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+
                     for (let i = 0; i < data.length; i += 4) {
                         if (data[i + 3] !== 0) {
                             let delta;
@@ -348,16 +377,17 @@
                             }
                         }
                     }
+                    ctx.putImageData(imageData, 0, 0);
                 }
-                ctx.putImageData(imageData, 0, 0);
 
                 canvas.toBlob(blob => {
+                    URL.revokeObjectURL(url);
                     const ext = 'png';
                     const newName = `${origBase}_${copyIndex}.${ext}`;
                     resolve(new File([blob], newName, { type: 'image/png' }));
                 }, 'image/png');
             };
-            img.src = URL.createObjectURL(file);
+            img.src = url;
         });
     }
 
@@ -1066,22 +1096,22 @@
 
         const optionAll = document.createElement('option');
         optionAll.value = 'all_pixels';
-        optionAll.textContent = 'All Pixels (±1)';
+        optionAll.textContent = 'All Pixels (±1) [Slow on >300px]';
         slipModePixelMethodSelect.appendChild(optionAll);
 
         const optionRandom = document.createElement('option');
         optionRandom.value = '1-3_random';
-        optionRandom.textContent = 'Random Pixels (±1-3)';
+        optionRandom.textContent = 'Random Pixels (±1-3) [Slow on >300px]';
         slipModePixelMethodSelect.appendChild(optionRandom);
 
         const optionSingleRandom = document.createElement('option');
         optionSingleRandom.value = '1-4_random_single_pixel';
-        optionSingleRandom.textContent = 'Single Random Pixel (±1-4)';
+        optionSingleRandom.textContent = 'Single Random Pixel (Fastest)';
         slipModePixelMethodSelect.appendChild(optionSingleRandom);
 
         const optionFullRandomSinglePixel = document.createElement('option');
         optionFullRandomSinglePixel.value = 'random_single_pixel_full_random_color';
-        optionFullRandomSinglePixel.textContent = 'Single Random Pixel (Full Random Color)';
+        optionFullRandomSinglePixel.textContent = 'Single Random Pixel (Full Color) (Fastest)';
         slipModePixelMethodSelect.appendChild(optionFullRandomSinglePixel);
 
         slipModePixelMethodSelect.value = slipModePixelMethod;
