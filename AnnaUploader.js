@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     7.3
+// @version     7.4
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -41,6 +41,7 @@
     let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false);
     //  Slip Mode Pixel Method - 'all_pixels', '1-3_random', '1-4_random_single_pixel', or 'random_single_pixel_full_random_color'
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
+    let slipModeGenerateAllFirst = GM_getValue('slipModeGenerateAllFirst', false);
 
     // Image resizing settings
     let enableResize = GM_getValue('enableResize', false);
@@ -532,21 +533,49 @@
                 const origBase = baseName(fileAfterCanvasProcessing.name);
                 downloadsMap[origBase] = [];
 
-                for (let i = 1; i <= copies; i++) {
-                    const fileToUpload = useMakeUnique
-                        ? await makeUniqueFile(
+                if (useMakeUnique && slipModeGenerateAllFirst) {
+                    displayMessage(`Generating ${copies} copies for ${origBase}...`, 'info');
+                    const generatedFiles = [];
+                    // 1. Generate all copies first
+                    for (let i = 1; i <= copies; i++) {
+                        const fileToUpload = await makeUniqueFile(
                             fileAfterCanvasProcessing, origBase, i,
                             resizeActive ? Number(resizeWidth) : null,
                             resizeActive ? Number(resizeHeight) : null
-                        )
-                        : fileAfterCanvasProcessing;
+                        );
+                        generatedFiles.push(fileToUpload);
+                        if (useDownload) downloadsMap[origBase].push(fileToUpload);
+                    }
 
-                    if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
-                    if (both) {
-                        uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_TSHIRT, 0, useForcedName));
-                        uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_DECAL, 0, useForcedName));
-                    } else {
-                        uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
+                    // 2. Then upload them
+                    displayMessage(`Starting upload for ${origBase} copies...`, 'info');
+                    for (const fileToUpload of generatedFiles) {
+                        if (both) {
+                            uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                            uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_DECAL, 0, useForcedName));
+                        } else {
+                            uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
+                        }
+                    }
+
+                } else {
+                    // Default behavior: Generate and upload on the fly
+                    for (let i = 1; i <= copies; i++) {
+                        const fileToUpload = useMakeUnique
+                            ? await makeUniqueFile(
+                                fileAfterCanvasProcessing, origBase, i,
+                                resizeActive ? Number(resizeWidth) : null,
+                                resizeActive ? Number(resizeHeight) : null
+                            )
+                            : fileAfterCanvasProcessing;
+
+                        if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
+                        if (both) {
+                            uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_TSHIRT, 0, useForcedName));
+                            uploadPromises.push(uploadFile(fileToUpload, ASSET_TYPE_DECAL, 0, useForcedName));
+                        } else {
+                            uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
+                        }
                     }
                 }
             }
@@ -1122,6 +1151,19 @@
             displayMessage(`Slip Mode Pixel Method set to: ${e.target.options[e.target.selectedIndex].text}`, 'success');
         };
         settingsModal.appendChild(slipModePixelMethodSelect);
+
+        // Slip Mode: Generate All First Toggle
+        const generateFirstBtn = createStyledButton(`Slip Mode: Generate All First: ${slipModeGenerateAllFirst ? 'On' : 'Off'}`, () => {
+            slipModeGenerateAllFirst = !slipModeGenerateAllFirst;
+            GM_setValue('slipModeGenerateAllFirst', slipModeGenerateAllFirst);
+            generateFirstBtn.textContent = `Slip Mode: Generate All First: ${slipModeGenerateAllFirst ? 'On' : 'Off'}`;
+            displayMessage(`Generate All First: ${slipModeGenerateAllFirst ? 'Enabled' : 'Disabled'}`, 'info');
+        });
+        Object.assign(generateFirstBtn.style, {
+             fontSize: '13px',
+             background: '#444' // Slightly different color to distinguish sub-setting
+        });
+        settingsModal.appendChild(generateFirstBtn);
 
         // Force Upload (through Canvas) toggle
         const forceUploadBtn = createStyledButton(`Force Upload: ${useForceCanvasUpload ? 'On' : 'Off'}`, () => {
