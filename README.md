@@ -14,9 +14,10 @@ some features not mentioned previously include
 # UserScript:
 https://greasyfork.org/en/scripts/534460-annauploader-roblox-multi-file-uploader
 # images
-Main:
-<img width="274" height="402" alt="AnnaUploader_main" src="https://github.com/user-attachments/assets/8ca5aae5-20f2-49e6-b99b-4d082dabdad4" />
-Settings:
+# Main
+<img width="297" height="598" alt="AnnaUploader_main" src="https://github.com/user-attachments/assets/8ca5aae5-20f2-49e6-b99b-4d082dabdad4" />
+
+# Settings
 <img width="297" height="598" alt="AnnaUploader_settings" src="https://github.com/user-attachments/assets/e3335b0a-e119-40ba-b1fe-781baca632a5" />
 
 
