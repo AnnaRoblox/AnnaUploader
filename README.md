@@ -13,6 +13,10 @@ some features not mentioned previously include
 # Mass Upload mode: allows you to select as many files from any place and then upload in mass
 # UserScript:
 https://greasyfork.org/en/scripts/534460-annauploader-roblox-multi-file-uploader
-# image
-![image](https://github.com/user-attachments/assets/91777214-7889-43a4-9c1e-1efe586d2a69)
+# images
+Main:
+<img width="274" height="402" alt="AnnaUploader_main" src="https://github.com/user-attachments/assets/8ca5aae5-20f2-49e6-b99b-4d082dabdad4" />
+Settings:
+<img width="297" height="598" alt="AnnaUploader_settings" src="https://github.com/user-attachments/assets/e3335b0a-e119-40ba-b1fe-781baca632a5" />
+
 
