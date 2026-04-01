@@ -1,7 +1,7 @@
 # AnnaUploader
 AnnaUploader is a open source roblox multi file uploader works for both t-shirts and decals
 # built-in slip mode 
-allowing you to upload the same image many times to get a slip
+allowing you to upload the same image many times to increase the chance of getting accepted
 # asset logger 
 logs assets for you even logs their images and name this is all done locally so its private
 # default name 
