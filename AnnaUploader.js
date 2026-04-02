@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     7.6
-// @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
+// @version     7.7
+// @description allows you to upload multiple T-Shirts Decals and audios easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
 // @match       https://www.roblox.com/communities/*
@@ -24,6 +24,7 @@
     const ROBLOX_UPLOAD_URL  = "https://apis.roblox.com/assets/user-auth/v1/assets";
     const ASSET_TYPE_TSHIRT  = 11;
     const ASSET_TYPE_DECAL   = 13;
+    const ASSET_TYPE_AUDIO   = 3;
     const FORCED_NAME        = "Uploaded Using AnnaUploader"; // Default name for assets
 
     // Storage keys and scan interval for asset logging
@@ -166,7 +167,9 @@
         fd.append('request', JSON.stringify({
             displayName,
             description: assetDescription,
-            assetType: assetType === ASSET_TYPE_TSHIRT ? "TShirt" : "Decal",
+            assetType: assetType === ASSET_TYPE_TSHIRT ? "TShirt" :
+                       assetType === ASSET_TYPE_DECAL ? "Decal" :
+                       assetType === ASSET_TYPE_AUDIO ? "Audio" : "Unknown",
             creationContext: { creator, expectedPrice: 0 }
         }));
 
@@ -284,6 +287,127 @@
         });
     }
 
+    let audioCtx = null;
+    function getAudioContext() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        return audioCtx;
+    }
+
+    // --- Audio Worker for non-blocking WAV encoding ---
+    const workerCode = `
+        self.onmessage = function(e) {
+            const { channelDatas, sampleRate, numChannels, bufferLength } = e.data;
+            const bitDepth = 16;
+            const bytesPerSample = bitDepth / 8;
+            const blockAlign = numChannels * bytesPerSample;
+            const dataSize = bufferLength * blockAlign;
+            const headerSize = 44;
+            const totalSize = headerSize + dataSize;
+            const arrayBuffer = new ArrayBuffer(totalSize);
+            const view = new DataView(arrayBuffer);
+
+            const writeString = (v, offset, str) => {
+                for (let i = 0; i < str.length; i++) v.setUint8(offset + i, str.charCodeAt(i));
+            };
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, totalSize - 8, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true); // PCM
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * blockAlign, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, bitDepth, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, dataSize, true);
+
+            const outData = new Int16Array(arrayBuffer, 44);
+            for (let i = 0; i < bufferLength; i++) {
+                for (let ch = 0; ch < numChannels; ch++) {
+                    const sample = channelDatas[ch][i];
+                    const s = Math.max(-1, Math.min(1, sample));
+                    outData[i * numChannels + ch] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+            }
+            self.postMessage(arrayBuffer, [arrayBuffer]);
+        };
+    `;
+    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(workerBlob);
+
+    function audioBufferToWavAsync(buffer) {
+        return new Promise((resolve) => {
+            const worker = new Worker(workerUrl);
+            const numChannels = buffer.numberOfChannels;
+            const channelDatas = [];
+            for (let ch = 0; ch < numChannels; ch++) {
+                // We must clone the data to transfer it to the worker
+                channelDatas.push(new Float32Array(buffer.getChannelData(ch)));
+            }
+            worker.onmessage = (e) => {
+                resolve(e.data);
+                worker.terminate();
+            };
+            worker.postMessage({
+                channelDatas,
+                sampleRate: buffer.sampleRate,
+                numChannels,
+                bufferLength: buffer.length
+            });
+        });
+    }
+
+    async function processAudioChunked(data, method, LSB_DELTA) {
+        const chunkSize = 100000; // Process 100k samples at a time
+        for (let i = 0; i < data.length; i += chunkSize) {
+            const end = Math.min(i + chunkSize, data.length);
+            for (let j = i; j < end; j++) {
+                if (method === 'all_pixels') {
+                    const delta = (Math.random() < 0.5 ? -1 : 1);
+                    data[j] = Math.max(-1, Math.min(1, data[j] + delta * LSB_DELTA));
+                } else if (method === '1-3_random' && j % 20 === 0) {
+                    const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 3) + 1);
+                    data[j] = Math.max(-1, Math.min(1, data[j] + delta * LSB_DELTA));
+                }
+            }
+            // Yield to main thread
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+    }
+
+    async function makeUniqueAudioFile(file, origBase, copyIndex) {
+        const ctx = getAudioContext();
+        const arrayBuffer = await file.arrayBuffer();
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+        const numChannels = audioBuffer.numberOfChannels;
+        const LSB_DELTA = 1 / 32768;
+
+        if (slipModePixelMethod === '1-4_random_single_pixel' || slipModePixelMethod === 'random_single_pixel_full_random_color') {
+            const channel = Math.floor(Math.random() * numChannels);
+            const data = audioBuffer.getChannelData(channel);
+            const index = Math.floor(Math.random() * data.length);
+
+            if (slipModePixelMethod === '1-4_random_single_pixel') {
+                const delta = (Math.random() < 0.5 ? -1 : 1) * (Math.floor(Math.random() * 4) + 1);
+                data[index] = Math.max(-1, Math.min(1, data[index] + delta * LSB_DELTA));
+            } else {
+                data[index] = (Math.random() * 2.0) - 1.0;
+            }
+        } else {
+            for (let ch = 0; ch < numChannels; ch++) {
+                await processAudioChunked(audioBuffer.getChannelData(ch), slipModePixelMethod, LSB_DELTA);
+            }
+        }
+
+        const wavBuffer = await audioBufferToWavAsync(audioBuffer);
+        const newFileName = `${origBase}_${copyIndex}.wav`;
+        return new File([wavBuffer], newFileName, { type: 'audio/wav' });
+    }
+
     function processImageThroughCanvas(file, targetType = 'image/png', width = null, height = null) {
         return new Promise((resolve, reject) => {
             const img = new Image();
@@ -399,12 +523,25 @@
         const downloadsMap = {};
         const copies = useMakeUnique ? uniqueCopies : 1;
         const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
+        const isAudio = assetType === ASSET_TYPE_AUDIO;
 
         if (massMode) {
             displayMessage('Processing files to add to queue...', 'info');
-            const processingTasks = [];
             for (const original of files) {
+                if (isAudio) {
+                    const origBase = baseName(original.name);
+                    for (let i = 1; i <= copies; i++) {
+                        const fileForQueue = useMakeUnique
+                            ? await makeUniqueAudioFile(original, origBase, i)
+                            : original;
+                        massQueue.push({ f: fileForQueue, type: ASSET_TYPE_AUDIO, forceName: useForcedName });
+                    }
+                    continue;
+                }
+
                 let fileToProcess = original;
+
+
 
                 // 1. WebP Conversion
                 if (original.type === 'image/webp') {
@@ -485,6 +622,20 @@
             const uploadPromises = [];
 
             for (const original of files) {
+                if (isAudio) {
+                    const origBase = baseName(original.name);
+                    downloadsMap[origBase] = [];
+                    for (let i = 1; i <= copies; i++) {
+                        const fileToUpload = useMakeUnique
+                            ? await makeUniqueAudioFile(original, origBase, i)
+                            : original;
+
+                        if (useMakeUnique && useDownload) downloadsMap[origBase].push(fileToUpload);
+                        uploadPromises.push(uploadFile(fileToUpload, assetType, 0, useForcedName));
+                    }
+                    continue;
+                }
+
                 let fileToProcess = original;
 
                 // 1. WebP Conversion
@@ -896,6 +1047,12 @@
             i.onchange = e => handleFileSelect(e.target.files, null, true);
             i.click();
         }));
+        uiContainer.appendChild(createStyledButton('Upload Audio', () => {
+            const i = document.createElement('input');
+            i.type = 'file'; i.accept = 'audio/*'; i.multiple = true;
+            i.onchange = e => handleFileSelect(e.target.files, ASSET_TYPE_AUDIO);
+            i.click();
+        }));
 
         toggleBtn = createStyledButton('Enable Mass Upload', () => {
             massMode = !massMode;
@@ -1014,7 +1171,7 @@
         // Removed the old 'Settings' button here.
 
         const hint = document.createElement('div');
-        hint.textContent = 'Paste images (Ctrl+V) to queue/upload';
+        hint.textContent = 'Paste images (Ctrl+V) to queue/upload or select files';
         hint.style.fontSize = '12px'; hint.style.color = '#aaa';
         hint.style.textAlign = 'center';
         hint.style.marginTop = '5px';
@@ -1325,7 +1482,7 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
         document.body.appendChild(settingsModal);
     }
 
-    async function handlePastedBlob(blob, originalType) {
+     async function handlePastedBlob(blob, originalType) {
     const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
 
     // Helper to generate a random string between 5 and 20 characters
