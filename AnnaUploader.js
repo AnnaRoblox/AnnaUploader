@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     7.5
+// @version     7.6
 // @description allows you to upload multiple T-Shirts/Decals easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -1326,86 +1326,97 @@ ${ entries.length ? `<ul>${entries.map(([id,entry])=>
     }
 
     async function handlePastedBlob(blob, originalType) {
-        const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
-        const ts = new Date().toISOString().replace(/[^a-z0-9]/gi,'_');
+    const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
 
-        const pastedName = await customPrompt('Enter a name for the image (no extension):', `pasted_${ts}`);
-        if (pastedName === null) return;
-        let name = pastedName.trim() || `pasted_${ts}`;
-        let filename = name.endsWith('.png') ? name : `${name}.png`;
-
-        let fileToProcess = new File([blob], filename, {type: originalType || blob.type});
-
-        if (fileToProcess.type === 'image/webp') {
-            displayMessage(`Converting pasted WebP image to PNG...`, 'info');
-            try {
-                fileToProcess = await convertWebPToPng(fileToProcess);
-                name = baseName(fileToProcess.name);
-                filename = fileToProcess.name;
-                displayMessage(`Pasted WebP converted to PNG.`, 'success');
-            } catch (error) {
-                displayMessage(`Failed to convert pasted WebP: ${error.message}`, 'error');
-                console.error(`[Conversion] Failed to convert pasted WebP:`, error);
-                return;
-            }
+    // Helper to generate a random string between 5 and 20 characters
+    const getRandomString = () => {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        const length = Math.floor(Math.random() * (20 - 5 + 1)) + 5;
+        let result = '';
+        for (let i = 0; i < length; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
         }
+        return result;
+    };
 
-        // Resize if enabled
-        if (resizeActive) {
-            displayMessage(`Resizing pasted image to ${resizeWidth}x${resizeHeight}...`, 'info');
-            try {
-                fileToProcess = await resizeImageFile(fileToProcess, Number(resizeWidth), Number(resizeHeight));
-                name = baseName(fileToProcess.name);
-                filename = fileToProcess.name;
-                displayMessage(`Pasted image resized.`, 'success');
-            } catch (error) {
-                displayMessage(`Failed to resize pasted image: ${error.message}`, 'error');
-                console.error(`[Resize] Failed to resize pasted image:`, error);
-                return;
-            }
-        }
+    const randomID = getRandomString();
+    const pastedName = await customPrompt('Enter a name for the image (no extension):', `${randomID}`);
 
-        if (useForceCanvasUpload) {
-            displayMessage(`Processing pasted image through canvas...`, 'info');
-            try {
-                fileToProcess = await processImageThroughCanvas(
-                    fileToProcess, 'image/png',
-                    resizeActive ? Number(resizeWidth) : null,
-                    resizeActive ? Number(resizeHeight) : null
-                );
-                name = baseName(fileToProcess.name);
-                filename = fileToProcess.name;
-                displayMessage(`Pasted image processed through canvas.`, 'success');
-            } catch (error) {
-                displayMessage(`Failed to process pasted image through canvas: ${error.message}`, 'error');
-                console.error(`[Canvas Process] Failed to process pasted image:`, error);
-                return;
-            }
-        }
+    if (pastedName === null) return;
+    let name = pastedName.trim() || `${randomID}`;
+    let filename = name.endsWith('.png') ? name : `${name}.png`;
 
-        const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, B=Both, or C=Cancel?', 'D');
-        if (!typeChoice) return;
-        const t = typeChoice.trim().toUpperCase();
+    let fileToProcess = new File([blob], filename, {type: originalType || blob.type});
 
-        let uploadAsBoth = false;
-        let type = null;
-
-        if (t === 'T') {
-            type = ASSET_TYPE_TSHIRT;
-        } else if (t === 'D') {
-            type = ASSET_TYPE_DECAL;
-        } else if (t === 'B') {
-            uploadAsBoth = true;
-        } else if (t === 'C') {
-            return;
-        } else {
-            displayMessage('Invalid asset type selected. Please choose T, D, or B.', 'error');
+    if (fileToProcess.type === 'image/webp') {
+        displayMessage(`Converting pasted WebP image to PNG...`, 'info');
+        try {
+            fileToProcess = await convertWebPToPng(fileToProcess);
+            name = baseName(fileToProcess.name);
+            filename = fileToProcess.name;
+            displayMessage(`Pasted WebP converted to PNG.`, 'success');
+        } catch (error) {
+            displayMessage(`Failed to convert pasted WebP: ${error.message}`, 'error');
+            console.error(`[Conversion] Failed to convert pasted WebP:`, error);
             return;
         }
-
-        handleFileSelect([fileToProcess], type, uploadAsBoth);
     }
 
+    // Resize if enabled
+    if (resizeActive) {
+        displayMessage(`Resizing pasted image to ${resizeWidth}x${resizeHeight}...`, 'info');
+        try {
+            fileToProcess = await resizeImageFile(fileToProcess, Number(resizeWidth), Number(resizeHeight));
+            name = baseName(fileToProcess.name);
+            filename = fileToProcess.name;
+            displayMessage(`Pasted image resized.`, 'success');
+        } catch (error) {
+            displayMessage(`Failed to resize pasted image: ${error.message}`, 'error');
+            console.error(`[Resize] Failed to resize pasted image:`, error);
+            return;
+        }
+    }
+
+    if (useForceCanvasUpload) {
+        displayMessage(`Processing pasted image through canvas...`, 'info');
+        try {
+            fileToProcess = await processImageThroughCanvas(
+                fileToProcess, 'image/png',
+                resizeActive ? Number(resizeWidth) : null,
+                resizeActive ? Number(resizeHeight) : null
+            );
+            name = baseName(fileToProcess.name);
+            filename = fileToProcess.name;
+            displayMessage(`Pasted image processed through canvas.`, 'success');
+        } catch (error) {
+            displayMessage(`Failed to process pasted image through canvas: ${error.message}`, 'error');
+            console.error(`[Canvas Process] Failed to process pasted image:`, error);
+            return;
+        }
+    }
+
+    const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, B=Both, or C=Cancel?', 'D');
+    if (!typeChoice) return;
+    const t = typeChoice.trim().toUpperCase();
+
+    let uploadAsBoth = false;
+    let type = null;
+
+    if (t === 'T') {
+        type = ASSET_TYPE_TSHIRT;
+    } else if (t === 'D') {
+        type = ASSET_TYPE_DECAL;
+    } else if (t === 'B') {
+        uploadAsBoth = true;
+    } else if (t === 'C') {
+        return;
+    } else {
+        displayMessage('Invalid asset type selected. Please choose T, D, or B.', 'error');
+        return;
+    }
+
+    handleFileSelect([fileToProcess], type, uploadAsBoth);
+}
     async function handlePaste(e) {
         const items = e.clipboardData?.items;
         if (!items) return;
