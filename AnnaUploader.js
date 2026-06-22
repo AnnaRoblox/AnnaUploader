@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     8.0
+// @version     8.1
 // @description allows you to upload multiple T-Shirts Decals and audios easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -12,9 +12,9 @@
 // @grant       GM_setValue
 // @require     https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
 // @require     https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
-// @license     MIT
 // @downloadURL https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.user.js
 // @updateURL   https://update.greasyfork.org/scripts/534460/AnnaUploader%20%28Roblox%20Multi-File%20Uploader%29.meta.js
+// @license     MIT
 // ==/UserScript==
 
 (function() {
@@ -25,7 +25,6 @@
     const ASSET_TYPE_DECAL   = 13;
     const ASSET_TYPE_AUDIO   = 3;
     const FORCED_NAME        = "Uploaded Using AnnaUploader";
-
     const STORAGE_KEY = 'annaUploaderAssetLog';
     const SCAN_INTERVAL_MS = 10_000;
 
@@ -39,7 +38,7 @@
     let useDownload   = GM_getValue('useDownload', false);
     let useForceCanvasUpload = GM_getValue('useForceCanvasUpload', false);
     let slipModePixelMethod = GM_getValue('slipModePixelMethod', '1-3_random');
-
+    let slipModeTemplate = GM_getValue('slipModeTemplate', 'default');
     let enableResize = GM_getValue('enableResize', false);
     let resizeWidth = GM_getValue('resizeWidth', 300);
     let resizeHeight = GM_getValue('resizeHeight', 300);
@@ -50,17 +49,39 @@
     let completed   = 0;
     let scanIntervalId = null;
     let csrfToken = null;
+
     let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn;
     let uiContainer;
     let settingsModal;
 
-    // Concurrency and Rate Limit Controllers
     const MAX_CONCURRENT = 15;
     let activeUploads = 0;
     let globalRateLimitPromise = null;
 
+    function getRandomString() {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        let result = '';
+        for (let i = 0; i < Math.floor(Math.random() * 16) + 5; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+        return result;
+    }
+
     function baseName(filename) {
         return filename.replace(/\.[^/.]+$/, '');
+    }
+
+    function generateVariantName(origBase, i, copies, ext) {
+        // If template is random, always return random
+        if (slipModeTemplate === 'random') return `${getRandomString()}.${ext}`;
+        // If only 1 copy and not random, return original name
+        if (copies <= 1) return `${origBase}.${ext}`;
+
+        switch (slipModeTemplate) {
+            case 'same':
+                return `${origBase}.${ext}`;
+            case 'default':
+            default:
+                return `${origBase}_${i}.${ext}`;
+        }
     }
 
     function loadLog() {
@@ -84,7 +105,7 @@
     }
 
     function scanForAssets() {
-        console.log('[AssetLogger] scanning for assets…');
+        console.log('[AssetLogger] scanning for assets...');
         document.querySelectorAll('[href]').forEach(el => {
             let m = el.href.match(/(?:https?:\/\/create\.roblox\.com)?\/store\/asset\/(\d+)/)
                  || el.href.match(/\/dashboard\/creations\/store\/(\d+)\/configure/);
@@ -94,9 +115,11 @@
                 const container = el.closest('*');
                 const img = container?.querySelector('img');
                 if (img?.src) image = img.src;
+
                 let name = null;
                 const nameEl = container?.querySelector('span.MuiTypography-root');
                 if (nameEl) name = nameEl.textContent.trim();
+
                 logAsset(id, image, name);
             }
         });
@@ -149,12 +172,10 @@
     async function uploadFile(file, assetType, forceNameParam) {
         let forceName = forceNameParam;
         let retries = 0;
-
         while (true) {
             if (globalRateLimitPromise) {
                 await globalRateLimitPromise;
             }
-
             if (!csrfToken) {
                 try { await fetchCSRFToken(); }
                 catch (e) { console.error("[Upload] Failed to fetch initial CSRF token:", e); return false; }
@@ -162,7 +183,6 @@
 
             const displayName = forceName ? FORCED_NAME : baseName(file.name);
             const creator = IS_GROUP ? { groupId: USER_ID } : { userId: USER_ID };
-
             const fd = new FormData();
             fd.append('fileContent', file, file.name);
             fd.append('request', JSON.stringify({
@@ -181,7 +201,6 @@
                     headers: { 'x-csrf-token': csrfToken },
                     body: fd
                 });
-
                 const txt = await resp.text();
                 let json; try { json = JSON.parse(txt); } catch (e) { }
 
@@ -208,19 +227,15 @@
                     if (enableAssetLogging) logAsset(json.assetId, null, displayName);
                     return true;
                 }
-
                 if (json?.message === 'Asset name length is invalid.' && !forceName && retries < 5) {
                     retries++; forceName = true; continue;
                 }
-
                 if (resp.status === 400 && json?.message?.includes('moderated') && retries < 5) {
                     retries++; forceName = true; continue;
                 }
-
                 if (resp.status === 403 && retries < 5) {
                     csrfToken = null; retries++; continue;
                 }
-
                 console.error(`[Upload] failed "${file.name}" [${resp.status}]`, txt);
                 return false;
             } catch (e) {
@@ -244,7 +259,6 @@
         }
     }
 
-    // CHUNKED NON-BLOCKING WAV ENCODER
     async function encodeWavChunked(audioBuffer, slipModeMethod) {
         const numChannels = audioBuffer.numberOfChannels;
         const sampleRate = audioBuffer.sampleRate;
@@ -275,22 +289,19 @@
 
         let offsetIdx = 44;
         const LSB = 1 / 32768;
-
         const isAll = slipModeMethod === 'all_pixels';
         const is1to3 = slipModeMethod === '1-3_random';
-
         const chunkSize = 250000;
+
         for (let start = 0; start < length; start += chunkSize) {
             const end = Math.min(start + chunkSize, length);
             for (let i = start; i < end; i++) {
-                // Determine acoustic variation / random noise for this exact sample
                 let noise = 0;
                 if (isAll) {
                     noise = (Math.random() < 0.5 ? -LSB : LSB);
                 } else if (is1to3 && i % 20 === 0) {
                     noise = (Math.random() < 0.5 ? -LSB : LSB) * (Math.floor(Math.random() * 3) + 1);
                 } else if (i % 250 === 0) {
-                    // Fallback for single_pixel modes: periodic tiny noise to evade acoustic fingerprinting
                     noise = (Math.random() < 0.5 ? -LSB : LSB);
                 }
 
@@ -301,48 +312,42 @@
                     offsetIdx += 2;
                 }
             }
-            await new Promise(r => setTimeout(r, 0)); // yield thread so UI never freezes
+            await new Promise(r => setTimeout(r, 0));
         }
         return buffer;
     }
 
     async function makeAudioVariations(file, origBase, copies, useMakeUnique, slipModeMethod, onVariationGenerated) {
+        const ext = file.name.split('.').pop() || 'mp3';
         if (!useMakeUnique) {
-            const ext = file.name.split('.').pop() || 'mp3';
             for (let i = 1; i <= copies; i++) {
-                onVariationGenerated(new File([file], copies > 1 ? `${origBase}_${i}.${ext}` : file.name, { type: file.type }), i);
+                const name = generateVariantName(origBase, i, copies, ext);
+                onVariationGenerated(new File([file], name, { type: file.type }), i);
             }
             return;
         }
 
-        // TRUE AUDIO SLIPMODE: Decode -> Mutate PCM -> Encode WAV
         const arrayBuffer = await file.arrayBuffer();
         let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
-        // ROBLOX 20MB LIMIT PROTECTOR
-        // Calculate projected WAV file size. If > 19.5MB, auto-downsample it to Mono 22kHz so it safely fits!
         const projectedSize = 44 + decodedBuffer.length * decodedBuffer.numberOfChannels * 2;
         if (projectedSize > 19500000) {
             updateStatus(`Audio large! Auto-compressing to avoid 20MB limit...`);
             const targetSampleRate = 22050;
             const targetLength = Math.ceil(decodedBuffer.length * (targetSampleRate / decodedBuffer.sampleRate));
             const offlineCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, targetLength, targetSampleRate);
-
             const source = offlineCtx.createBufferSource();
             source.buffer = decodedBuffer;
             source.connect(offlineCtx.destination);
             source.start(0);
-
             decodedBuffer = await offlineCtx.startRendering();
         }
 
         for (let i = 1; i <= copies; i++) {
             updateStatus(`Preparing acoustic variation... (${i}/${copies})`);
-
             const wavBuffer = await encodeWavChunked(decodedBuffer, slipModeMethod);
-            const newName = copies > 1 ? `${origBase}_${i}.wav` : `${origBase}.wav`;
-
+            const newName = generateVariantName(origBase, i, copies, 'wav');
             onVariationGenerated(new File([wavBuffer], newName, { type: 'audio/wav' }), i);
         }
     }
@@ -374,9 +379,11 @@
         }
 
         if (!useMakeUnique) {
+            const ext = file.type.split('/')[1] || 'png';
             if (!useForceCanvasUpload && !resizeW && !resizeH && (file.type === 'image/png' || file.type === 'image/jpeg')) {
                 for(let i=1; i<=copies; i++){
-                    onVariationGenerated(new File([file], copies > 1 ? `${origBase}_${i}.${file.type.split('/')[1]}` : file.name, { type: file.type }), i);
+                    const name = generateVariantName(origBase, i, copies, ext);
+                    onVariationGenerated(new File([file], name, { type: file.type }), i);
                 }
                 return;
             }
@@ -385,19 +392,20 @@
                 else baseCanvas.convertToBlob({ type: 'image/png' }).then(res);
             });
             for(let i=1; i<=copies; i++){
-                onVariationGenerated(new File([blob], copies > 1 ? `${origBase}_${i}.png` : `${origBase}.png`, { type: 'image/png' }), i);
+                const name = generateVariantName(origBase, i, copies, 'png');
+                onVariationGenerated(new File([blob], name, { type: 'image/png' }), i);
             }
             return;
         }
 
         let baseImageData = null;
-        if (slipModeMethod !== 'random_resize' && slipModeMethod !== '1-4_random_single_pixel' && slipModeMethod !== 'random_single_pixel_full_random_color' && slipModeMethod !== 'random_single_pixel_alpha_0') {
+        if (slipModeMethod !== 'random_resize' && !slipModeMethod.includes('single_pixel')) {
             baseImageData = baseCtx.getImageData(0, 0, targetWidth, targetHeight);
         }
 
         for (let i = 1; i <= copies; i++) {
             updateStatus(`Preparing image copy... (${i}/${copies})`);
-            await new Promise(r => setTimeout(r, 0)); // Yield thread so UI doesn't freeze
+            await new Promise(r => setTimeout(r, 0));
 
             let currentW = targetWidth;
             let currentH = targetHeight;
@@ -416,10 +424,8 @@
                 targetCanvas.height = currentH;
                 const tCtx = targetCanvas.getContext('2d', { willReadFrequently: true });
                 tCtx.drawImage(baseCanvas, 0, 0);
-
                 const x = Math.floor(Math.random() * currentW);
                 const y = Math.floor(Math.random() * currentH);
-
                 if (slipModeMethod === '1-4_random_single_pixel') {
                     const original = tCtx.getImageData(x, y, 1, 1);
                     const d = original.data;
@@ -442,7 +448,6 @@
                 targetCanvas.width = currentW;
                 targetCanvas.height = currentH;
                 const tCtx = targetCanvas.getContext('2d');
-
                 const newImageData = new ImageData(
                     new Uint8ClampedArray(baseImageData.data),
                     baseImageData.width,
@@ -450,8 +455,6 @@
                 );
                 const data = newImageData.data;
                 const is1to3 = slipModeMethod === '1-3_random';
-
-                // Chunked to avoid freezing large images
                 const chunkSize = 1000000;
                 for (let cStart = 0; cStart < data.length; cStart += chunkSize) {
                     const cEnd = Math.min(cStart + chunkSize, data.length);
@@ -467,7 +470,6 @@
                     }
                     await new Promise(r => setTimeout(r, 0));
                 }
-
                 tCtx.putImageData(newImageData, 0, 0);
             }
 
@@ -475,9 +477,7 @@
                 if (targetCanvas.toBlob) targetCanvas.toBlob(res, 'image/png');
                 else targetCanvas.convertToBlob({ type: 'image/png' }).then(res);
             });
-            const newName = copies > 1 ? `${origBase}_${i}.png` : `${origBase}.png`;
-
-            // Instantly pass the generated file to the pipeline!
+            const newName = generateVariantName(origBase, i, copies, 'png');
             onVariationGenerated(new File([blob], newName, { type: 'image/png' }), i);
         }
     }
@@ -488,8 +488,8 @@
         const copies = useMakeUnique ? uniqueCopies : 1;
         const resizeActive = enableResize && Number(resizeWidth) > 0 && Number(resizeHeight) > 0;
         const isAudio = assetType === ASSET_TYPE_AUDIO;
-
         const allFilesToProcess = Array.from(files);
+
         batchTotal = allFilesToProcess.length * (both ? 2 : 1) * copies;
         completed = 0;
         updateStatus();
@@ -501,15 +501,12 @@
         }
 
         const uploadPromises = [];
-
         for (const original of allFilesToProcess) {
             const origBase = baseName(original.name);
             const collectedVariations = [];
 
-            // This callback catches the file the INSTANT it finishes generating, and shoots it into the upload pool!
             const handleVariationReady = (fileToUpload) => {
                 collectedVariations.push(fileToUpload);
-
                 if (massMode) {
                     if (both) {
                         massQueue.push({ f: fileToUpload, type: ASSET_TYPE_TSHIRT, forceName: useForcedName });
@@ -558,17 +555,22 @@
         if (massMode) {
             displayMessage(`Added successfully to mass queue!`, 'success');
         } else {
-            // Wait for all the active uploads that were pushed into the pipeline to finish
             Promise.all(uploadPromises).then(() => {
                 if (enableAssetLogging) scanForAssets();
                 displayMessage('Upload batch complete!', 'success');
 
-                // Zip download handler
                 if (useMakeUnique && useDownload) {
                     for (const [origBase, fileList] of Object.entries(downloadsMap)) {
                         if (!fileList.length) continue;
                         const zip = new JSZip();
-                        fileList.forEach(f => zip.file(f.name, f));
+                        fileList.forEach((f, idx) => {
+                            let zipFileName = f.name;
+                            if (slipModeTemplate === 'same' && fileList.length > 1) {
+                                const ext = f.name.split('.').pop();
+                                zipFileName = `${baseName(f.name)}_${idx + 1}.${ext}`;
+                            }
+                            zip.file(zipFileName, f);
+                        });
                         zip.generateAsync({ type: 'blob' }).then(blob => {
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement('a');
@@ -593,21 +595,16 @@
             displayMessage('Nothing queued for mass upload!', 'info');
             return;
         }
-
         displayMessage(`Starting mass upload of ${massQueue.length} files...`, 'info');
-
         batchTotal = massQueue.length;
         completed = 0;
         const tasks = [...massQueue];
         massQueue = [];
-
         startBtn.style.display = 'none';
         massMode = false;
         toggleBtn.textContent = 'Enable Mass Upload';
 
-        // Push all to the Concurrent Queue Manager
         const promises = tasks.map(task => enqueueUpload(task.f, task.type, task.forceName));
-
         Promise.all(promises).then(() => {
             displayMessage('Mass upload complete!', 'success');
             if (enableAssetLogging) scanForAssets();
@@ -652,12 +649,10 @@
                 minWidth: '300px', display: 'flex', flexDirection: 'column',
                 gap: '15px', transition: 'opacity 0.3s ease-in-out', opacity: '0'
             });
-
             const textDiv = document.createElement('div');
             textDiv.textContent = message;
             textDiv.style.fontSize = '16px';
             modal.appendChild(textDiv);
-
             const input = document.createElement('input');
             input.type = 'text'; input.value = defaultValue;
             Object.assign(input.style, {
@@ -665,34 +660,26 @@
                 background: '#333', color: '#fff', fontSize: '14px', outline: 'none'
             });
             modal.appendChild(input);
-
             const buttonContainer = document.createElement('div');
             Object.assign(buttonContainer.style, { display: 'flex', justifyContent: 'space-around', gap: '10px', marginTop: '10px' });
-
             const okBtn = document.createElement('button');
             okBtn.textContent = 'OK';
             Object.assign(okBtn.style, { padding: '10px 20px', cursor: 'pointer', color: '#fff', background: '#007bff', border: 'none', borderRadius: '5px', fontSize: '14px', flexGrow: '1' });
-            okBtn.onmouseover = () => okBtn.style.background = '#0056b3';
-            okBtn.onmouseout = () => okBtn.style.background = '#007bff';
             okBtn.onclick = () => {
                 modal.style.opacity = '0';
                 modal.addEventListener('transitionend', () => modal.remove());
                 resolve(input.value);
             };
             buttonContainer.appendChild(okBtn);
-
             const cancelBtn = document.createElement('button');
             cancelBtn.textContent = 'Cancel';
             Object.assign(cancelBtn.style, { padding: '10px 20px', cursor: 'pointer', color: '#fff', background: '#6c757d', border: 'none', borderRadius: '5px', fontSize: '14px', flexGrow: '1' });
-            cancelBtn.onmouseover = () => cancelBtn.style.background = '#5a6268';
-            cancelBtn.onmouseout = () => cancelBtn.style.background = '#6c757d';
             cancelBtn.onclick = () => {
                 modal.style.opacity = '0';
                 modal.addEventListener('transitionend', () => modal.remove());
                 resolve(null);
             };
             buttonContainer.appendChild(cancelBtn);
-
             modal.appendChild(buttonContainer);
             document.body.appendChild(modal);
             setTimeout(() => modal.style.opacity = '1', 10);
@@ -723,15 +710,17 @@
 
         const close = createStyledButton('×', () => uiContainer.remove());
         Object.assign(close.style, { position: 'absolute', top: '5px', right: '8px', background: 'transparent', border: 'none', fontSize: '18px', color: '#e0e0e0', fontWeight: 'bold', transition: 'color 0.2s', padding: '5px 8px' });
-        close.onmouseover = () => close.style.color = '#fff';
-        close.onmouseout = () => close.style.color = '#e0e0e0';
         close.title = 'Close AnnaUploader';
         uiContainer.appendChild(close);
 
-        const settingsGear = createStyledButton('⚙️', () => createSettingsUI());
+        const settingsGear = createStyledButton('⚙️', () => {
+            if (settingsModal && settingsModal.style.display !== 'none') {
+                settingsModal.style.display = 'none';
+            } else {
+                createSettingsUI();
+            }
+        });
         Object.assign(settingsGear.style, { position: 'absolute', top: '5px', left: '8px', background: 'transparent', border: 'none', fontSize: '18px', color: '#e0e0e0', fontWeight: 'bold', transition: 'color 0.2s', padding: '5px 8px' });
-        settingsGear.onmouseover = () => settingsGear.style.color = '#fff';
-        settingsGear.onmouseout = () => settingsGear.style.color = '#e0e0e0';
         settingsGear.title = 'Settings';
         uiContainer.appendChild(settingsGear);
 
@@ -772,8 +761,6 @@
         startBtn = createStyledButton('Start Mass Upload', startMassUpload);
         startBtn.style.display = 'none';
         Object.assign(startBtn.style, { background: '#28a745', border: '1px solid #218838' });
-        startBtn.onmouseover = () => startBtn.style.background = '#218838';
-        startBtn.onmouseout = () => startBtn.style.background = '#28a745';
         uiContainer.appendChild(startBtn);
 
         const slipBtn = createStyledButton(`Slip Mode: ${useMakeUnique ? 'On' : 'Off'}`, () => {
@@ -785,7 +772,7 @@
             if (!useMakeUnique) {
                 useDownload = false;
                 GM_setValue('useDownload', useDownload);
-                downloadBtn.textContent = 'Download Images: Off';
+                downloadBtn.textContent = 'Download Assets: Off';
             }
         });
         uiContainer.appendChild(slipBtn);
@@ -800,10 +787,10 @@
         };
         uiContainer.appendChild(copiesInput);
 
-        downloadBtn = createStyledButton(`Download Images: ${useDownload ? 'On' : 'Off'}`, () => {
+        downloadBtn = createStyledButton(`Download Assets: ${useDownload ? 'On' : 'Off'}`, () => {
             useDownload = !useDownload;
             GM_setValue('useDownload', useDownload);
-            downloadBtn.textContent = `Download Images: ${useDownload ? 'On' : 'Off'}`;
+            downloadBtn.textContent = `Download Assets: ${useDownload ? 'On' : 'Off'}`;
         });
         downloadBtn.style.display = useMakeUnique ? 'block' : 'none';
         uiContainer.appendChild(downloadBtn);
@@ -861,20 +848,19 @@
         settingsModal = document.createElement('div');
         Object.assign(settingsModal.style, {
             position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            width: '300px', background: '#1a1a1a', border: '2px solid #333', color: '#e0e0e0',
-            padding: '20px', zIndex: 10005, borderRadius: '10px', boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
-            display: 'flex', flexDirection: 'column', gap: '15px', fontFamily: 'Inter, Arial, sans-serif'
+            width: '320px', maxHeight: '90vh', overflowY: 'auto',
+            background: '#1a1a1a', border: '2px solid #333', color: '#e0e0e0',
+            padding: '15px', zIndex: 10005, borderRadius: '10px', boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
+            display: 'flex', flexDirection: 'column', gap: '10px', fontFamily: 'Inter, Arial, sans-serif'
         });
 
         const closeSettings = createStyledButton('×', () => settingsModal.style.display = 'none');
         Object.assign(closeSettings.style, { position: 'absolute', top: '8px', right: '10px', background: 'transparent', border: 'none', fontSize: '20px', color: '#e0e0e0', fontWeight: 'bold', transition: 'color 0.2s', padding: '5px 10px' });
-        closeSettings.onmouseover = () => closeSettings.style.color = '#fff';
-        closeSettings.onmouseout = () => closeSettings.style.color = '#e0e0e0';
         settingsModal.appendChild(closeSettings);
 
         const title = document.createElement('h3');
         title.textContent = 'AnnaUploader Settings';
-        title.style.margin = '0 0 15px 0'; title.style.color = '#4af'; title.style.textAlign = 'center';
+        title.style.margin = '0 0 5px 0'; title.style.color = '#4af'; title.style.textAlign = 'center';
         settingsModal.appendChild(title);
 
         const nameBtn = createStyledButton(`Use default Name: ${useForcedName ? 'On' : 'Off'}`, () => {
@@ -893,30 +879,80 @@
 
         const descLabel = document.createElement('label');
         descLabel.textContent = 'Asset Description:';
-        Object.assign(descLabel.style, { display: 'block', fontSize: '14px', color: '#bbb' });
+        Object.assign(descLabel.style, { display: 'block', fontSize: '13px', color: '#bbb', marginBottom: '2px' });
         settingsModal.appendChild(descLabel);
 
         const descInput = document.createElement('textarea');
-        descInput.rows = 3; descInput.value = assetDescription;
-        Object.assign(descInput.style, { width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #555', background: '#333', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' });
-        descInput.onchange = (e) => { assetDescription = e.target.value; GM_setValue('assetDescription', assetDescription); };
+        descInput.value = assetDescription;
+        Object.assign(descInput.style, {
+            width: '100%',
+            padding: '8px',
+            borderRadius: '5px',
+            border: '1px solid #555',
+            background: '#333',
+            color: '#fff',
+            fontSize: '13px',
+            lineHeight: '1.4',
+            outline: 'none',
+            boxSizing: 'border-box',
+            resize: 'none',
+            fontFamily: 'inherit',
+            overflow: 'hidden',
+            minHeight: '40px',
+            flexShrink: '0',
+            display: 'block'
+        });
+
+        const autoResize = () => {
+            descInput.style.height = 'auto';
+            // We add a tiny buffer (2px) to account for borders when using border-box
+            descInput.style.height = (descInput.scrollHeight + 2) + 'px';
+        };
+
+        descInput.oninput = autoResize;
+        descInput.onchange = (e) => {
+            assetDescription = e.target.value;
+            GM_setValue('assetDescription', assetDescription);
+        };
         settingsModal.appendChild(descInput);
+
+        // Use a more reliable trigger for initial sizing
+        setTimeout(autoResize, 50);
+        // Also listen for window resize just in case
+        window.addEventListener('resize', autoResize);
+
+        const slipModeTemplateLabel = document.createElement('label');
+        slipModeTemplateLabel.textContent = 'SlipMode Template:';
+        Object.assign(slipModeTemplateLabel.style, { display: 'block', marginBottom: '2px', fontSize: '13px', color: '#bbb' });
+        settingsModal.appendChild(slipModeTemplateLabel);
+
+        const slipModeTemplateSelect = document.createElement('select');
+        Object.assign(slipModeTemplateSelect.style, { width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #555', background: '#333', color: '#fff', fontSize: '13px', outline: 'none', marginBottom: '2px' });
+
+        const tplDefault = document.createElement('option'); tplDefault.value = 'default'; tplDefault.textContent = 'Default (name_1)'; slipModeTemplateSelect.appendChild(tplDefault);
+        const tplRandom = document.createElement('option'); tplRandom.value = 'random'; tplRandom.textContent = 'Random Name'; slipModeTemplateSelect.appendChild(tplRandom);
+        const tplSame = document.createElement('option'); tplSame.value = 'same'; tplSame.textContent = 'Same Name'; slipModeTemplateSelect.appendChild(tplSame);
+
+        slipModeTemplateSelect.value = slipModeTemplate;
+        slipModeTemplateSelect.onchange = (e) => {
+            slipModeTemplate = e.target.value; GM_setValue('slipModeTemplate', slipModeTemplate);
+            displayMessage(`Template set to: ${e.target.options[e.target.selectedIndex].text}`, 'success');
+        };
+        settingsModal.appendChild(slipModeTemplateSelect);
 
         const slipModePixelMethodLabel = document.createElement('label');
         slipModePixelMethodLabel.textContent = 'Slip Mode Pixel Method:';
-        Object.assign(slipModePixelMethodLabel.style, { display: 'block', marginBottom: '5px', fontSize: '14px', color: '#bbb' });
+        Object.assign(slipModePixelMethodLabel.style, { display: 'block', marginBottom: '2px', fontSize: '13px', color: '#bbb' });
         settingsModal.appendChild(slipModePixelMethodLabel);
 
         const slipModePixelMethodSelect = document.createElement('select');
-        Object.assign(slipModePixelMethodSelect.style, { width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #555', background: '#333', color: '#fff', fontSize: '14px', outline: 'none', marginBottom: '10px' });
-
+        Object.assign(slipModePixelMethodSelect.style, { width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #555', background: '#333', color: '#fff', fontSize: '13px', outline: 'none', marginBottom: '5px' });
         const optionAll = document.createElement('option'); optionAll.value = 'all_pixels'; optionAll.textContent = 'All Pixels (±1) [Slow on >300px]'; slipModePixelMethodSelect.appendChild(optionAll);
         const optionRandom = document.createElement('option'); optionRandom.value = '1-3_random'; optionRandom.textContent = 'Random Pixels (±1-3) [Slow on >300px]'; slipModePixelMethodSelect.appendChild(optionRandom);
         const optionSingleRandom = document.createElement('option'); optionSingleRandom.value = '1-4_random_single_pixel'; optionSingleRandom.textContent = 'Single Random Pixel (Fastest)'; slipModePixelMethodSelect.appendChild(optionSingleRandom);
         const optionFullRandomSinglePixel = document.createElement('option'); optionFullRandomSinglePixel.value = 'random_single_pixel_full_random_color'; optionFullRandomSinglePixel.textContent = 'Single Random Pixel (Full Color) (Fastest)'; slipModePixelMethodSelect.appendChild(optionFullRandomSinglePixel);
         const optionAlpha0SinglePixel = document.createElement('option'); optionAlpha0SinglePixel.value = 'random_single_pixel_alpha_0'; optionAlpha0SinglePixel.textContent = 'Single Random Pixel (Random Color, Alpha 0) (Fastest)'; slipModePixelMethodSelect.appendChild(optionAlpha0SinglePixel);
         const optionRandomResize = document.createElement('option'); optionRandomResize.value = 'random_resize'; optionRandomResize.textContent = 'Random Resize (Unique Dimensions) (Fastest)'; slipModePixelMethodSelect.appendChild(optionRandomResize);
-
         slipModePixelMethodSelect.value = slipModePixelMethod;
         slipModePixelMethodSelect.onchange = (e) => {
             slipModePixelMethod = e.target.value; GM_setValue('slipModePixelMethod', slipModePixelMethod);
@@ -932,37 +968,30 @@
         settingsModal.appendChild(forceUploadBtn);
 
         const resizeContainer = document.createElement('div');
-        resizeContainer.style.display = 'flex'; resizeContainer.style.flexDirection = 'column'; resizeContainer.style.gap = '5px'; resizeContainer.style.margin = '5px 0 0 0';
-
+        Object.assign(resizeContainer.style, { display: 'flex', flexDirection: 'column', gap: '5px', margin: '5px 0 0 0' });
         const resizeToggleBtn = createStyledButton(`Resize Images: ${enableResize ? 'On' : 'Off'}`, () => {
             enableResize = !enableResize; GM_setValue('enableResize', enableResize);
             resizeToggleBtn.textContent = `Resize Images: ${enableResize ? 'On' : 'Off'}`;
             widthInput.disabled = heightInput.disabled = !enableResize;
         });
         resizeContainer.appendChild(resizeToggleBtn);
-
         const inputRow = document.createElement('div');
-        inputRow.style.display = 'flex'; inputRow.style.gap = '7px'; inputRow.style.alignItems = 'center';
-
+        Object.assign(inputRow.style, { display: 'flex', gap: '7px', alignItems: 'center' });
         const widthInput = document.createElement('input');
         widthInput.type = 'number'; widthInput.min = '1'; widthInput.value = resizeWidth; widthInput.placeholder = 'Width';
         Object.assign(widthInput.style, { width: '60px', padding: '6px', borderRadius: '4px', border: '1px solid #555', background: '#333', color: '#fff' });
         widthInput.disabled = !enableResize;
         widthInput.onchange = () => { let val = Math.max(1, parseInt(widthInput.value, 10) || 512); widthInput.value = val; resizeWidth = val; GM_setValue('resizeWidth', resizeWidth); };
         inputRow.appendChild(widthInput);
-
         const xLabel = document.createElement('span'); xLabel.textContent = '×'; xLabel.style.color = '#ccc'; inputRow.appendChild(xLabel);
-
         const heightInput = document.createElement('input');
         heightInput.type = 'number'; heightInput.min = '1'; heightInput.value = resizeHeight; heightInput.placeholder = 'Height';
         Object.assign(heightInput.style, { width: '60px', padding: '6px', borderRadius: '4px', border: '1px solid #555', background: '#333', color: '#fff' });
         heightInput.disabled = !enableResize;
         heightInput.onchange = () => { let val = Math.max(1, parseInt(heightInput.value, 10) || 512); heightInput.value = val; resizeHeight = val; GM_setValue('resizeHeight', resizeHeight); };
         inputRow.appendChild(heightInput);
-
         const pxLabel = document.createElement('span'); pxLabel.textContent = 'px'; pxLabel.style.color = '#bbb'; inputRow.appendChild(pxLabel);
         resizeContainer.appendChild(inputRow);
-
         const resizeDesc = document.createElement('div');
         resizeDesc.textContent = "If enabled, images will be resized before upload. Applies to Slip Mode too.";
         resizeDesc.style.fontSize = '12px'; resizeDesc.style.color = '#aaa'; resizeDesc.style.marginTop = '3px';
@@ -976,28 +1005,20 @@
             <style>body{font-family:Arial;padding:20px;background:#121212;color:#f0f0f0;} h1{margin-bottom:15px;color:#4af;} ul{list-style:none;padding:0;} li{margin-bottom:15px;padding:10px;background:#1e1e1e;border-radius:8px;display:flex;flex-direction:column;gap:8px;} img{max-height:60px;border:1px solid #444;border-radius:4px;object-fit:contain;background:#333;} .asset-info{display:flex;align-items:center;gap:15px;} a{color:#7cf;text-decoration:none;font-weight:bold;} a:hover{text-decoration:underline;} .asset-name{font-size:0.9em;color:#bbb;margin-left:auto;text-align:right;} button{margin-bottom:20px;color:#fff;background:#3a3a3a;border:1px solid #555;padding:8px 15px;border-radius:5px;cursor:pointer;} button:hover{background:#505050;}</style></head><body>
             <button onclick="document.body.style.background=(document.body.style.background==='#121212'?'#f0f0f0':'#121212');document.body.style.color=(document.body.style.color==='#f0f0f0'?'#121212':'#f0f0f0');">Toggle Theme</button>
             <h1>Logged Assets</h1>
-            ${ entries.length ? `<ul>${entries.map(([id,entry])=> `<li><div class="asset-info">${ entry.image ? `<img src="${entry.image}" alt="Asset thumbnail">` : `<span style="color:#888;">(no image)</span>` }<a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a><span style="font-size:0.85em; color:#999;">${new Date(entry.date).toLocaleString()}</span></div><div class="asset-name">${entry.name}</div></li>`).join('')}</ul>` : `<p style="color:#888;"><em>No assets logged yet.</em></p>`}
+            ${ entries.length ? `<ul>${entries.map(([id,entry])=>` <li><div class="asset-info">${ entry.image ? `<img src="${entry.image}" alt="Asset thumbnail">` : `<span style="color:#888;">(no image)</span>` }<a href="https://create.roblox.com/store/asset/${id}" target="_blank">${id}</a><span style="font-size:0.85em; color:#999;">${new Date(entry.date).toLocaleString()}</span></div><div class="asset-name">${entry.name}</div></li`).join('')}</ul>` : `<p style="color:#888;"><em>No assets logged yet.</em></p>`}
             </body></html>`);
             w.document.close();
         }));
-
         document.body.appendChild(settingsModal);
     }
 
     async function handlePastedBlob(blob, originalType) {
-        const getRandomString = () => {
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-            let result = '';
-            for (let i = 0; i < Math.floor(Math.random() * 16) + 5; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
-            return result;
-        };
         const randomID = getRandomString();
         const pastedName = await customPrompt('Enter a name for the image (no extension):', `${randomID}`);
         if (pastedName === null) return;
         let name = pastedName.trim() || `${randomID}`;
         let filename = name.endsWith('.png') ? name : `${name}.png`;
         let fileToProcess = new File([blob], filename, {type: originalType || blob.type});
-
         const typeChoice = await customPrompt('Upload as T=T-Shirt, D=Decal, B=Both, or C=Cancel?', 'D');
         if (!typeChoice) return;
         const t = typeChoice.trim().toUpperCase();
@@ -1007,7 +1028,6 @@
         else if (t === 'B') uploadAsBoth = true;
         else if (t === 'C') return;
         else { displayMessage('Invalid asset type selected. Please choose T, D, or B.', 'error'); return; }
-
         handleFileSelect([fileToProcess], type, uploadAsBoth);
     }
 
@@ -1056,5 +1076,4 @@
         }
         toggleAssetScanner(enableAssetLogging);
     });
-
 })();
