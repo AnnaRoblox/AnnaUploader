@@ -412,8 +412,8 @@
             let targetCanvas = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(currentW, currentH) : document.createElement('canvas');
 
             if (slipModeMethod === 'random_resize') {
-                currentW = Math.max(1, targetWidth + (Math.floor(Math.random() * 11) - 5));
-                currentH = Math.max(1, targetHeight + (Math.floor(Math.random() * 11) - 5));
+                currentW = Math.max(1, targetWidth + (Math.floor(Math.random() * 100) - 5));
+                currentH = Math.max(1, targetHeight + (Math.floor(Math.random() * 100) - 5));
                 targetCanvas.width = currentW;
                 targetCanvas.height = currentH;
                 const tCtx = targetCanvas.getContext('2d');
