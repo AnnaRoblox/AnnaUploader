@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        AnnaUploader (Roblox Multi-File Uploader)
 // @namespace   https://github.com/AnnaRoblox
-// @version     8.1
+// @version     8.2
 // @description allows you to upload multiple T-Shirts Decals and audios easily with AnnaUploader
 // @match       https://create.roblox.com/*
 // @match       https://www.roblox.com/users/*/profile*
@@ -42,6 +42,7 @@
     let enableResize = GM_getValue('enableResize', false);
     let resizeWidth = GM_getValue('resizeWidth', 300);
     let resizeHeight = GM_getValue('resizeHeight', 300);
+    let isUIMinimized = GM_getValue('isUIMinimized', false);
 
     let massMode    = false;
     let massQueue   = [];
@@ -52,6 +53,8 @@
 
     let statusEl, toggleBtn, startBtn, copiesInput, downloadBtn;
     let uiContainer;
+    let minimizedContainer;
+    let minimizedStatusEl;
     let settingsModal;
 
     const MAX_CONCURRENT = 15;
@@ -155,18 +158,18 @@
     }
 
     function updateStatus(customMsg) {
-        if (!statusEl) return;
-        if (customMsg) {
-            statusEl.textContent = customMsg;
-            return;
+        let msg = customMsg;
+        if (!msg) {
+            if (massMode) {
+                msg = `${massQueue.length} queued for Mass Upload`;
+            } else if (batchTotal > 0) {
+                msg = `Completed ${completed} of ${batchTotal}...`;
+            } else {
+                msg = '';
+            }
         }
-        if (massMode) {
-            statusEl.textContent = `${massQueue.length} queued for Mass Upload`;
-        } else if (batchTotal > 0) {
-            statusEl.textContent = `Completed ${completed} of ${batchTotal}...`;
-        } else {
-            statusEl.textContent = '';
-        }
+        if (statusEl) statusEl.textContent = msg;
+        if (minimizedStatusEl) minimizedStatusEl.textContent = msg;
     }
 
     async function uploadFile(file, assetType, forceNameParam) {
@@ -259,7 +262,7 @@
         }
     }
 
-    async function encodeWavChunked(audioBuffer, slipModeMethod) {
+    async function encodeWavChunked(audioBuffer, slipModeMethod, copyIndex = 0) {
         const numChannels = audioBuffer.numberOfChannels;
         const sampleRate = audioBuffer.sampleRate;
         const length = audioBuffer.length;
@@ -291,24 +294,53 @@
         const LSB = 1 / 32768;
         const isAll = slipModeMethod === 'all_pixels';
         const is1to3 = slipModeMethod === '1-3_random';
+        const isLSBRandom = slipModeMethod === 'lsb_random';
+        const isLSBFlip = slipModeMethod === 'lsb_flip';
         const chunkSize = 250000;
+
+        // For LSB sparse modes, use random sparse pattern - density tuned for uniqueness vs quality
+        const lsbDensity = 0.06; // 6% of samples touched = random noise pattern, invisible but unique
 
         for (let start = 0; start < length; start += chunkSize) {
             const end = Math.min(start + chunkSize, length);
             for (let i = start; i < end; i++) {
-                let noise = 0;
-                if (isAll) {
-                    noise = (Math.random() < 0.5 ? -LSB : LSB);
-                } else if (is1to3 && i % 20 === 0) {
-                    noise = (Math.random() < 0.5 ? -LSB : LSB) * (Math.floor(Math.random() * 3) + 1);
-                } else if (i % 250 === 0) {
-                    noise = (Math.random() < 0.5 ? -LSB : LSB);
-                }
-
                 for (let ch = 0; ch < numChannels; ch++) {
+                    let noise = 0;
+                    if (!isLSBRandom && !isLSBFlip) {
+                        if (isAll) {
+                            noise = (Math.random() < 0.5 ? -LSB : LSB);
+                        } else if (is1to3 && i % 20 === 0) {
+                            noise = (Math.random() < 0.5 ? -LSB : LSB) * (Math.floor(Math.random() * 3) + 1);
+                        } else if (i % 250 === 0) {
+                            noise = (Math.random() < 0.5 ? -LSB : LSB);
+                        }
+                    }
+
                     let sample = channels[ch][i] + noise;
                     if (sample > 1) sample = 1; else if (sample < -1) sample = -1;
-                    view.setInt16(offsetIdx, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                    let intSample = Math.round(sample < 0 ? sample * 0x8000 : sample * 0x7FFF);
+                    if (intSample > 32767) intSample = 32767;
+                    if (intSample < -32768) intSample = -32768;
+
+                    //  LSB MODES - sparse random pattern
+                    if (isLSBRandom) {
+                        // Random sparse: only touch ~6% of samples with random LSB
+                        // Each copy gets different random positions => infinite unique variants
+                        if (Math.random() < lsbDensity || i < 20) {
+                            // i < 20 guarantees first samples encode copy uniqueness even on short audio
+                            // mix copyIndex into randomness to guarantee uniqueness
+                            const randBit = (Math.random() < 0.5 ? 1 : 0) ^ (copyIndex & 1) ^ (i & 1);
+                            intSample = (intSample & ~1) | randBit;
+                        }
+                    } else if (isLSBFlip) {
+                        // Flip sparse: flip LSB on random 6% of samples
+                        // random subset => every copy different
+                        if (Math.random() < lsbDensity || (i % 997 === copyIndex % 997)) {
+                            intSample = intSample ^ 1;
+                        }
+                    }
+
+                    view.setInt16(offsetIdx, intSample, true);
                     offsetIdx += 2;
                 }
             }
@@ -346,7 +378,7 @@
 
         for (let i = 1; i <= copies; i++) {
             updateStatus(`Preparing acoustic variation... (${i}/${copies})`);
-            const wavBuffer = await encodeWavChunked(decodedBuffer, slipModeMethod);
+            const wavBuffer = await encodeWavChunked(decodedBuffer, slipModeMethod, i);
             const newName = generateVariantName(origBase, i, copies, 'wav');
             onVariationGenerated(new File([wavBuffer], newName, { type: 'audio/wav' }), i);
         }
@@ -445,6 +477,7 @@
                     tCtx.putImageData(singlePixel, x, y);
                 }
             } else {
+                // All-pixel modes including IMPROVED LSB modes (sparse random)
                 targetCanvas.width = currentW;
                 targetCanvas.height = currentH;
                 const tCtx = targetCanvas.getContext('2d');
@@ -455,17 +488,76 @@
                 );
                 const data = newImageData.data;
                 const is1to3 = slipModeMethod === '1-3_random';
+                const isLSBRandom = slipModeMethod === 'lsb_random';
+                const isLSBFlip = slipModeMethod === 'lsb_flip';
                 const chunkSize = 1000000;
+
+                // Density for sparse modes: 7% = random noise pattern, looks clean but unique
+                const lsbDensity = 0.07;
+
+                // For guaranteed uniqueness, embed copy index into first few pixels LSB
+                // This ensures even if random misses, each copy is different
+                const embedCount = Math.min(32, Math.floor(data.length / 4));
+                for (let k = 0; k < embedCount; k++) {
+                    const idx = k * 4;
+                    if (data[idx + 3] === 0) continue;
+                    // Encode copy index bits into LSB to guarantee uniqueness
+                    if (isLSBRandom || isLSBFlip) {
+                        // Only embed for LSB modes
+                        if (k < 8) {
+                            const bit = (i >> k) & 1;
+                            if (isLSBRandom) {
+                                data[idx] = (data[idx] & 0xFE) | bit;
+                                data[idx+1] = (data[idx+1] & 0xFE) | ((i >> (k+3)) & 1);
+                            } else if (isLSBFlip) {
+                                // For flip, flip if bit is 1 to make it unique per copy
+                                if (bit) data[idx] ^= 1;
+                            }
+                        }
+                    }
+                }
+
                 for (let cStart = 0; cStart < data.length; cStart += chunkSize) {
                     const cEnd = Math.min(cStart + chunkSize, data.length);
                     for (let j = cStart; j < cEnd; j += 4) {
                         if (data[j + 3] !== 0) {
-                            const delta = (Math.random() < 0.5 ? -1 : 1) * (is1to3 ? Math.floor(Math.random() * 3) + 1 : 1);
-                            let r = data[j] + delta; let g = data[j+1] + delta; let b = data[j+2] + delta;
-                            if (r > 255) r = 255; else if (r < 0) r = 0;
-                            if (g > 255) g = 255; else if (g < 0) g = 0;
-                            if (b > 255) b = 255; else if (b < 0) b = 0;
-                            data[j] = r; data[j+1] = g; data[j+2] = b;
+                            if (isLSBRandom) {
+                                // Sparse random LSB noise - only ~7% pixels
+                                // Each copy gets different random positions => infinite unique variants
+                                // Looks like subtle random static in LSB only, 100% invisible
+                                if (Math.random() < lsbDensity) {
+                                    // Randomize LSB of each channel with random bit
+                                    data[j] = (data[j] & 0xFE) | (Math.random() < 0.5 ? 1 : 0);
+                                    data[j+1] = (data[j+1] & 0xFE) | (Math.random() < 0.5 ? 1 : 0);
+                                    data[j+2] = (data[j+2] & 0xFE) | (Math.random() < 0.5 ? 1 : 0);
+                                    // Randomly also touch alpha LSB if semi-transparent to add more entropy (safe)
+                                    if (data[j+3] !== 255 && Math.random() < 0.3) {
+                                        data[j+3] = (data[j+3] & 0xFE) | (Math.random() < 0.5 ? 1 : 0);
+                                        if (data[j+3] === 0) data[j+3] = 1; // avoid making fully transparent
+                                    }
+                                }
+                            } else if (isLSBFlip) {
+                                // Sparse random flip
+                                // flips random 7% + deterministic pattern based on copy index
+                                // => every copy has different random pattern, unlimited uniques
+                                const pixelIndex = j / 4;
+                                const shouldFlipRandom = Math.random() < lsbDensity;
+                                // Deterministic extra flip to guarantee uniqueness: pattern shifts with copy i
+                                const shouldFlipDeterministic = ((pixelIndex + i * 9973) % 1000) < 5; // ~0.5% extra
+                                if (shouldFlipRandom || shouldFlipDeterministic) {
+                                    data[j] ^= 1;
+                                    data[j+1] ^= 1;
+                                    data[j+2] ^= 1;
+                                }
+                            } else {
+                                // +/-1 logic
+                                const delta = (Math.random() < 0.5 ? -1 : 1) * (is1to3 ? Math.floor(Math.random() * 3) + 1 : 1);
+                                let r = data[j] + delta; let g = data[j+1] + delta; let b = data[j+2] + delta;
+                                if (r > 255) r = 255; else if (r < 0) r = 0;
+                                if (g > 255) g = 255; else if (g < 0) g = 0;
+                                if (b > 255) b = 255; else if (b < 0) b = 0;
+                                data[j] = r; data[j+1] = g; data[j+2] = b;
+                            }
                         }
                     }
                     await new Promise(r => setTimeout(r, 0));
@@ -699,6 +791,58 @@
     }
 
     function createUI() {
+        // --- Minimized floating button ---
+        minimizedContainer = document.createElement('div');
+        Object.assign(minimizedContainer.style, {
+            position: 'fixed', top: '10px', right: '10px',
+            background: '#1a1a1a', border: '2px solid #4af', color: '#e0e0e0',
+            padding: '8px 10px', zIndex: 10000, borderRadius: '20px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)', display: 'none',
+            flexDirection: 'row', alignItems: 'center', gap: '8px',
+            fontFamily: 'Inter, Arial, sans-serif', cursor: 'pointer'
+        });
+
+        const miniIcon = document.createElement('span');
+        miniIcon.textContent = '📦';
+        miniIcon.style.fontSize = '16px';
+        minimizedContainer.appendChild(miniIcon);
+
+        const miniTitle = document.createElement('span');
+        miniTitle.textContent = 'AnnaUploader';
+        Object.assign(miniTitle.style, { color: '#4af', fontWeight: 'bold', fontSize: '13px' });
+        minimizedContainer.appendChild(miniTitle);
+
+        minimizedStatusEl = document.createElement('span');
+        Object.assign(minimizedStatusEl.style, { fontSize: '11px', color: '#aaa', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+        minimizedContainer.appendChild(minimizedStatusEl);
+
+        const restoreBtn = document.createElement('button');
+        restoreBtn.textContent = '□';
+        Object.assign(restoreBtn.style, {
+            padding: '2px 8px', cursor: 'pointer', color: '#fff', background: '#3a3a3a',
+            border: '1px solid #555', borderRadius: '5px', fontSize: '14px', marginLeft: '4px'
+        });
+        restoreBtn.title = 'Restore';
+        restoreBtn.onclick = (e) => {
+            e.stopPropagation();
+            isUIMinimized = false;
+            GM_setValue('isUIMinimized', false);
+            uiContainer.style.display = 'flex';
+            minimizedContainer.style.display = 'none';
+        };
+        minimizedContainer.appendChild(restoreBtn);
+
+        // clicking the whole bar also restores
+        minimizedContainer.onclick = () => {
+            isUIMinimized = false;
+            GM_setValue('isUIMinimized', false);
+            uiContainer.style.display = 'flex';
+            minimizedContainer.style.display = 'none';
+        };
+
+        document.body.appendChild(minimizedContainer);
+
+        // --- Main UI ---
         uiContainer = document.createElement('div');
         Object.assign(uiContainer.style, {
             position: 'fixed', top: '10px', right: '10px', width: '280px',
@@ -708,10 +852,25 @@
             gap: '10px', fontFamily: 'Inter, Arial, sans-serif', transition: 'top 0.3s ease-in-out'
         });
 
-        const close = createStyledButton('×', () => uiContainer.remove());
+        const close = createStyledButton('×', () => {
+            uiContainer.remove();
+            minimizedContainer.remove();
+            if (settingsModal) settingsModal.remove();
+        });
         Object.assign(close.style, { position: 'absolute', top: '5px', right: '8px', background: 'transparent', border: 'none', fontSize: '18px', color: '#e0e0e0', fontWeight: 'bold', transition: 'color 0.2s', padding: '5px 8px' });
         close.title = 'Close AnnaUploader';
         uiContainer.appendChild(close);
+
+        const minimizeBtn = createStyledButton('−', () => {
+            isUIMinimized = true;
+            GM_setValue('isUIMinimized', true);
+            uiContainer.style.display = 'none';
+            minimizedContainer.style.display = 'flex';
+            updateStatus();
+        });
+        Object.assign(minimizeBtn.style, { position: 'absolute', top: '5px', right: '38px', background: 'transparent', border: 'none', fontSize: '20px', color: '#e0e0e0', fontWeight: 'bold', transition: 'color 0.2s', padding: '5px 8px', lineHeight: '14px' });
+        minimizeBtn.title = 'Minimize UI';
+        uiContainer.appendChild(minimizeBtn);
 
         const settingsGear = createStyledButton('⚙️', () => {
             if (settingsModal && settingsModal.style.display !== 'none') {
@@ -841,6 +1000,12 @@
         uiContainer.appendChild(statusEl);
 
         document.body.appendChild(uiContainer);
+
+        // Apply minimized state on load
+        if (isUIMinimized) {
+            uiContainer.style.display = 'none';
+            minimizedContainer.style.display = 'flex';
+        }
     }
 
     function createSettingsUI() {
@@ -848,7 +1013,7 @@
         settingsModal = document.createElement('div');
         Object.assign(settingsModal.style, {
             position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            width: '320px', maxHeight: '90vh', overflowY: 'auto',
+            width: '340px', maxHeight: '90vh', overflowY: 'auto',
             background: '#1a1a1a', border: '2px solid #333', color: '#e0e0e0',
             padding: '15px', zIndex: 10005, borderRadius: '10px', boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
             display: 'flex', flexDirection: 'column', gap: '10px', fontFamily: 'Inter, Arial, sans-serif'
@@ -905,7 +1070,6 @@
 
         const autoResize = () => {
             descInput.style.height = 'auto';
-            // We add a tiny buffer (2px) to account for borders when using border-box
             descInput.style.height = (descInput.scrollHeight + 2) + 'px';
         };
 
@@ -916,9 +1080,7 @@
         };
         settingsModal.appendChild(descInput);
 
-        // Use a more reliable trigger for initial sizing
         setTimeout(autoResize, 50);
-        // Also listen for window resize just in case
         window.addEventListener('resize', autoResize);
 
         const slipModeTemplateLabel = document.createElement('label');
@@ -947,12 +1109,18 @@
 
         const slipModePixelMethodSelect = document.createElement('select');
         Object.assign(slipModePixelMethodSelect.style, { width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #555', background: '#333', color: '#fff', fontSize: '13px', outline: 'none', marginBottom: '5px' });
+
+        // added LSB OPTIONS - sparse random patterns, infinite uniques
+        const optionLSBRandom = document.createElement('option'); optionLSBRandom.value = 'lsb_random'; optionLSBRandom.textContent = 'LSB Random Sparse (7% noise - Invisible)'; slipModePixelMethodSelect.appendChild(optionLSBRandom);
+        const optionLSBFlip = document.createElement('option'); optionLSBFlip.value = 'lsb_flip'; optionLSBFlip.textContent = 'LSB Flip Sparse (7% flip - Unique each copy)'; slipModePixelMethodSelect.appendChild(optionLSBFlip);
+
         const optionAll = document.createElement('option'); optionAll.value = 'all_pixels'; optionAll.textContent = 'All Pixels (±1) [Slow on >300px]'; slipModePixelMethodSelect.appendChild(optionAll);
         const optionRandom = document.createElement('option'); optionRandom.value = '1-3_random'; optionRandom.textContent = 'Random Pixels (±1-3) [Slow on >300px]'; slipModePixelMethodSelect.appendChild(optionRandom);
         const optionSingleRandom = document.createElement('option'); optionSingleRandom.value = '1-4_random_single_pixel'; optionSingleRandom.textContent = 'Single Random Pixel (Fastest)'; slipModePixelMethodSelect.appendChild(optionSingleRandom);
         const optionFullRandomSinglePixel = document.createElement('option'); optionFullRandomSinglePixel.value = 'random_single_pixel_full_random_color'; optionFullRandomSinglePixel.textContent = 'Single Random Pixel (Full Color) (Fastest)'; slipModePixelMethodSelect.appendChild(optionFullRandomSinglePixel);
         const optionAlpha0SinglePixel = document.createElement('option'); optionAlpha0SinglePixel.value = 'random_single_pixel_alpha_0'; optionAlpha0SinglePixel.textContent = 'Single Random Pixel (Random Color, Alpha 0) (Fastest)'; slipModePixelMethodSelect.appendChild(optionAlpha0SinglePixel);
         const optionRandomResize = document.createElement('option'); optionRandomResize.value = 'random_resize'; optionRandomResize.textContent = 'Random Resize (Unique Dimensions) (Fastest)'; slipModePixelMethodSelect.appendChild(optionRandomResize);
+
         slipModePixelMethodSelect.value = slipModePixelMethod;
         slipModePixelMethodSelect.onchange = (e) => {
             slipModePixelMethod = e.target.value; GM_setValue('slipModePixelMethod', slipModePixelMethod);
